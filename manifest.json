@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "HiddenTabby",
+  "version": "0.1.0",
+  "description": "Keep workspaces tidy by switching between saved tab groups.",
+  "permissions": ["tabs", "tabGroups", "sessions", "contextMenus", "storage", "sidePanel"],
+  "background": {
+    "service_worker": "src/service-worker.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Open HiddenTabby",
+    "default_popup": "popup.html"
+  },
+  "options_ui": {
+    "page": "manager.html",
+    "open_in_tab": true
+  },
+  "side_panel": {
+    "default_path": "manager.html"
+  }
+}

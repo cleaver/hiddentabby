@@ -1,0 +1,426 @@
+:root {
+  color-scheme: light dark;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: #101827;
+  color: #eef4fa;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  min-width: 320px;
+  margin: 0;
+  background: radial-gradient(ellipse at 15% 0%, #1b2e42 0, #101827 45rem);
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+button,
+a,
+select {
+  -webkit-tap-highlight-color: transparent;
+}
+
+button {
+  color: inherit;
+}
+
+a {
+  color: #94dfc0;
+}
+
+.page-shell {
+  width: min(1100px, 100% - 40px);
+  margin: 0 auto;
+  padding: 28px 0 44px;
+}
+
+.page-header {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  margin-bottom: 13px;
+}
+
+.brand-mark {
+  display: grid;
+  width: 46px;
+  height: 46px;
+  place-items: center;
+  border: 1px solid #48627c;
+  border-radius: 14px;
+  background: #1d3043;
+  color: #a7f3d0;
+  font-size: 22px;
+  font-weight: 750;
+}
+
+.eyebrow {
+  margin: 0 0 4px;
+  color: #91a7bd;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin-top: 0;
+}
+
+h1 {
+  margin-bottom: 0;
+  font-size: 21px;
+  letter-spacing: -0.03em;
+}
+
+h2 {
+  margin-bottom: 0;
+  font-size: 19px;
+  letter-spacing: -0.02em;
+}
+
+h3 {
+  margin-bottom: 5px;
+  font-size: 14px;
+}
+
+.status {
+  min-height: 22px;
+  margin: 0 2px 14px;
+  color: #afbed0;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.status[data-kind="error"] {
+  color: #ffaaaa;
+}
+
+.status[data-kind="success"] {
+  color: #a7f3d0;
+}
+
+.panel {
+  margin-top: 15px;
+  padding: 20px;
+  border: 1px solid #2e4258;
+  border-radius: 16px;
+  background: rgb(19 31 47 / 92%);
+  box-shadow: 0 18px 44px rgb(0 0 0 / 15%);
+}
+
+.panel-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 17px;
+}
+
+.create-form {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+input,
+select {
+  min-height: 38px;
+  padding: 8px 10px;
+  border: 1px solid #3a5068;
+  border-radius: 9px;
+  background: #101d2d;
+  color: #eef4fa;
+  font-size: 12px;
+}
+
+input:focus-visible,
+select:focus-visible,
+button:focus-visible,
+a:focus-visible {
+  outline: 2px solid #84d8b8;
+  outline-offset: 2px;
+}
+
+.button {
+  display: inline-flex;
+  min-height: 36px;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 12px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  font-size: 11px;
+  font-weight: 650;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.button.primary {
+  background: #7ed4b2;
+  color: #10251f;
+}
+
+.button.secondary {
+  border-color: #3d566f;
+  background: #1a2a3d;
+  color: #c3d3e3;
+  white-space: nowrap;
+}
+
+.button.danger {
+  border-color: #714751;
+  background: #321f2b;
+  color: #ffb4b8;
+}
+
+.button:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+}
+
+.group-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(340px, 100%), 1fr));
+  gap: 11px;
+}
+
+.group-card {
+  min-width: 0;
+  padding: 15px;
+  border: 1px solid #34495f;
+  border-radius: 12px;
+  background: #172538;
+}
+
+.group-title-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 12px;
+}
+
+.color-dot {
+  width: 10px;
+  height: 10px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--group-color, #87909b);
+}
+
+.group-title {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.active-badge,
+.group-count {
+  flex: 0 0 auto;
+  margin-left: auto;
+  color: #9eb0c4;
+  font-size: 10px;
+}
+
+.active-badge {
+  padding: 4px 7px;
+  border-radius: 99px;
+  background: #203f37;
+  color: #9de7c7;
+}
+
+.group-controls,
+.group-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+}
+
+.group-controls {
+  margin-bottom: 10px;
+}
+
+.group-controls input {
+  min-width: 100px;
+  flex: 1;
+}
+
+.group-controls select {
+  width: 100px;
+}
+
+.group-actions .button {
+  min-height: 32px;
+  padding: 7px 10px;
+}
+
+.tab-list {
+  display: grid;
+  gap: 8px;
+}
+
+.tab-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 13px;
+  align-items: center;
+  padding: 11px 12px;
+  border: 1px solid #2d4056;
+  border-radius: 10px;
+  background: #142235;
+}
+
+.tab-copy {
+  min-width: 0;
+}
+
+.tab-title {
+  margin: 0 0 4px;
+  overflow-wrap: anywhere;
+  color: #eef4fa;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.tab-url,
+.tab-meta,
+.muted {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: #9eafc3;
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.tab-meta {
+  margin-top: 4px;
+}
+
+.tab-move {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.tab-move select {
+  min-width: 118px;
+}
+
+.settings-panel > p {
+  margin: 12px 0 16px;
+  color: #b3c0d0;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.brave-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px;
+  border: 1px solid #33495f;
+  border-radius: 12px;
+  background: #172538;
+}
+
+#brave-container-card[hidden],
+#brave-containers-help[hidden] {
+  display: none;
+}
+
+.brave-card p {
+  max-width: 650px;
+  margin: 0;
+  color: #aebed0;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.help-link {
+  display: inline-block;
+  margin-top: 11px;
+  font-size: 11px;
+}
+
+.page-footer {
+  margin: 15px 3px 0;
+  color: #95a6ba;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.empty-state {
+  padding: 20px 14px;
+  border: 1px dashed #3a4a5e;
+  border-radius: 10px;
+  color: #aebcd0;
+  font-size: 12px;
+  text-align: center;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  clip-path: inset(50%);
+}
+
+@media (max-width: 640px) {
+  .page-shell {
+    width: calc(100% - 22px);
+    padding-top: 16px;
+  }
+
+  .panel {
+    padding: 14px;
+  }
+
+  .panel-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .create-form {
+    width: 100%;
+    justify-content: stretch;
+  }
+
+  .create-form input {
+    min-width: 0;
+    flex: 1;
+  }
+
+  .tab-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .tab-move {
+    justify-content: flex-start;
+  }
+
+  .brave-card {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}

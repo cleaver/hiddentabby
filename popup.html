@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>HiddenTabby</title>
+    <link rel="stylesheet" href="popup.css">
+    <script type="module" src="popup.js"></script>
+  </head>
+  <body>
+    <main class="popup">
+      <header class="popup-header">
+        <div class="brand-mark" aria-hidden="true">H</div>
+        <div>
+          <p class="eyebrow">Your workspaces</p>
+          <h1>HiddenTabby</h1>
+        </div>
+      </header>
+
+      <p id="status" class="status" role="status" aria-live="polite">Loading groups…</p>
+      <section aria-labelledby="groups-heading">
+        <div class="section-heading">
+          <h2 id="groups-heading">Switch group</h2>
+          <span id="window-count" class="muted"></span>
+        </div>
+        <div id="groups" class="groups" aria-label="Tab groups"></div>
+      </section>
+
+      <form id="create-form" class="create-form">
+        <label class="sr-only" for="group-name">New group name</label>
+        <input id="group-name" name="name" maxlength="40" placeholder="Create a group" required>
+        <button class="add-button" type="submit" aria-label="Create group">+</button>
+      </form>
+
+      <footer class="popup-footer">
+        <button id="open-manager" class="link-button" type="button">Manage groups and tabs</button>
+        <button id="open-side-panel" class="link-button secondary-link" type="button" hidden>Open side panel</button>
+      </footer>
+    </main>
+  </body>
+</html>

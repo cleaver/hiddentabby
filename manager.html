@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>HiddenTabby — Manage groups</title>
+    <link rel="stylesheet" href="manager.css">
+    <script type="module" src="manager.js"></script>
+  </head>
+  <body>
+    <main class="page-shell">
+      <header class="page-header">
+        <div class="brand-mark" aria-hidden="true">H</div>
+        <div>
+          <p class="eyebrow">Workspace manager</p>
+          <h1>HiddenTabby</h1>
+        </div>
+      </header>
+
+      <p id="status" class="status" role="status" aria-live="polite">Loading your groups…</p>
+
+      <section class="panel" aria-labelledby="groups-heading">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">Organize</p>
+            <h2 id="groups-heading">Groups</h2>
+          </div>
+          <form id="create-form" class="create-form">
+            <label class="sr-only" for="group-name">New group name</label>
+            <input id="group-name" name="name" maxlength="40" placeholder="New group name" required>
+            <button class="button primary" type="submit">Create group</button>
+          </form>
+        </div>
+        <div id="groups" class="group-grid"></div>
+      </section>
+
+      <section class="panel" aria-labelledby="tabs-heading">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">Membership</p>
+            <h2 id="tabs-heading">Saved tabs</h2>
+          </div>
+          <p id="tab-summary" class="muted"></p>
+        </div>
+        <div id="tabs" class="tab-list"></div>
+      </section>
+
+      <section class="panel settings-panel" aria-labelledby="settings-heading">
+        <div>
+          <p class="eyebrow">Preferences</p>
+          <h2 id="settings-heading">Settings</h2>
+        </div>
+        <p>Group and tab metadata stays in this browser profile. HiddenTabby does not sync it.</p>
+        <div id="brave-container-card" class="brave-card" hidden>
+          <div>
+            <h3>Brave Containers</h3>
+            <p>Containers isolate site data. HiddenTabby cannot read or assign Container membership through a supported extension API, so use Brave's own controls.</p>
+          </div>
+          <a id="open-brave-container-settings" class="button secondary" href="brave://settings/braveContent">Open Brave Container settings</a>
+        </div>
+        <a id="brave-containers-help" class="help-link" href="https://support.brave.app/hc/en-us/articles/39077103885325-How-do-I-use-Containers-in-Brave" target="_blank" rel="noopener" hidden>Brave Containers help</a>
+      </section>
+
+      <footer class="page-footer">HiddenTabby closes inactive-group tabs and restores them when you switch back. Restored pages may lose unsaved form data or live page state.</footer>
+    </main>
+  </body>
+</html>
