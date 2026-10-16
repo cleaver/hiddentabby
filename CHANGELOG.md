@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.5 — 2026-10-16
+
+- Explain checksum and artifact attestation verification and their limits.
+
 ## 0.1.4 — 2026-10-16
 
 - Add the MIT license to the repository and downloadable extension package.

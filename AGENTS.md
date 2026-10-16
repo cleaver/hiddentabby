@@ -18,4 +18,4 @@ Run `npm test` for unit and integration tests, `npm run test:e2e` for packaged C
 
 ## Changelog, Commits, and Pull Requests
 
-Record user-visible changes under **Unreleased** in **CHANGELOG.md** as they are made. When releasing, date and version that section alongside the version bump in **manifest.json**, then create and push the matching Git tag (for example, `v0.1.4`). Use short Conventional Commit subjects, such as `feat: add tab actions` or `fix: handle missing page titles`. Pull requests should describe the user-visible change, list the browsers checked, include a screenshot for popup changes, and explain any manifest permission changes.
+Record user-visible changes under **Unreleased** in **CHANGELOG.md** as they are made. When releasing, date and version that section alongside the version bump in **manifest.json**, then create and push the matching Git tag (for example, `v0.1.5`). Use short Conventional Commit subjects, such as `feat: add tab actions` or `fix: handle missing page titles`. Pull requests should describe the user-visible change, list the browsers checked, include a screenshot for popup changes, and explain any manifest permission changes.
