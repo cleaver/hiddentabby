@@ -333,6 +333,119 @@ test("manual tab close forgets one record while window close keeps dormant group
   assert.equal(afterWindowClose.windows[0].isOpen, false);
 });
 
+test("a tab closed just before switching is not resurrected when its removal event races the switch", async () => {
+  const windows = [normalWindow()];
+  const { controller, store, browser } = setup(windows);
+  const initial = await controller.getState();
+  const manuallyClosedRecord = initial.tabs.find((tab) => tab.browserTabId === 101);
+  let destinationGroupId;
+  await store.update((state) => {
+    const next = createGroup(state, { name: "Empty destination" });
+    destinationGroupId = next.groups.find((group) => group.name === "Empty destination").id;
+    return next;
+  });
+
+  // The browser has already closed the tab, but Chrome's onRemoved event has
+  // not reached the controller when the popup's switch command is handled.
+  windows[0].tabs = windows[0].tabs.filter((tab) => tab.id !== 101);
+  const removeTabs = browser.removeTabs.bind(browser);
+  let signalRemoveStarted;
+  const removeStarted = new Promise((resolve) => { signalRemoveStarted = resolve; });
+  let releaseRemove;
+  const removeGate = new Promise((resolve) => { releaseRemove = resolve; });
+  browser.removeTabs = async (tabIds) => {
+    signalRemoveStarted();
+    await removeGate;
+    await removeTabs(tabIds);
+  };
+
+  const switchAway = controller.switchGroup(destinationGroupId);
+  await removeStarted;
+  const delayedRemoval = controller.onTabRemoved(101, { windowId: 10, isWindowClosing: false });
+  releaseRemove();
+  await switchAway;
+  const removalState = await delayedRemoval;
+  assert.equal(removalState.tabs.some((tab) => tab.id === manuallyClosedRecord.id), false,
+    "A pending switch must discard a snapshot already absent from the live browser.");
+
+  const restoredDefault = await controller.switchGroup(initial.activeGroupId);
+  assert.equal(restoredDefault.state.tabs.some((tab) => tab.id === manuallyClosedRecord.id), false,
+    "A manually closed tab must not return when switching back to Default.");
+});
+
+test("a manual close during switch preparation removes that tab from the pending restore", async () => {
+  const window = normalWindow();
+  window.tabs.push({ id: 103, windowId: 10, index: 2, url: "https://www.madcss.com/", title: "MadCSS" });
+  const windows = [window];
+  const { controller, store, browser } = setup(windows);
+  const initial = await controller.getState();
+  const manuallyClosedRecord = initial.tabs.find((tab) => tab.browserTabId === 103);
+  let destinationGroupId;
+  await store.update((state) => {
+    const next = createGroup(state, { name: "Empty destination" });
+    destinationGroupId = next.groups.find((group) => group.name === "Empty destination").id;
+    return next;
+  });
+
+  let signalRecentlyClosed;
+  const recentlyClosedStarted = new Promise((resolve) => { signalRecentlyClosed = resolve; });
+  let releaseRecentlyClosed;
+  const recentlyClosedGate = new Promise((resolve) => { releaseRecentlyClosed = resolve; });
+  browser.getRecentlyClosed = async () => {
+    signalRecentlyClosed();
+    await recentlyClosedGate;
+    return [];
+  };
+
+  const switchAway = controller.switchGroup(destinationGroupId);
+  await recentlyClosedStarted;
+  windows[0].tabs = windows[0].tabs.filter((tab) => tab.id !== 103);
+  await controller.onTabRemoved(103, { windowId: 10, isWindowClosing: false });
+  releaseRecentlyClosed();
+  const switched = await switchAway;
+
+  assert.equal(switched.state.tabs.some((tab) => tab.id === manuallyClosedRecord.id), false,
+    "The manually closed MadCSS tab must not remain in the pending group-switch restore set.");
+  const restoredDefault = await controller.switchGroup(initial.activeGroupId);
+  assert.equal(restoredDefault.state.tabs.some((tab) => tab.id === manuallyClosedRecord.id), false,
+    "Switching back to Default must not restore the MadCSS tab that closed during switch preparation.");
+});
+
+test("a manual close during an inactive-group move removes the pending moved snapshot", async () => {
+  const window = normalWindow();
+  window.tabs.push({ id: 103, windowId: 10, index: 2, url: "https://www.madcss.com/", title: "MadCSS" });
+  const windows = [window];
+  const { controller, store, browser } = setup(windows);
+  const initial = await controller.getState();
+  const manuallyClosedRecord = initial.tabs.find((tab) => tab.browserTabId === 103);
+  let destinationGroupId;
+  await store.update((state) => {
+    const next = createGroup(state, { name: "Later" });
+    destinationGroupId = next.groups.find((group) => group.name === "Later").id;
+    return next;
+  });
+
+  let signalRecentlyClosed;
+  const recentlyClosedStarted = new Promise((resolve) => { signalRecentlyClosed = resolve; });
+  let releaseRecentlyClosed;
+  const recentlyClosedGate = new Promise((resolve) => { releaseRecentlyClosed = resolve; });
+  browser.getRecentlyClosed = async () => {
+    signalRecentlyClosed();
+    await recentlyClosedGate;
+    return [];
+  };
+
+  const move = controller.moveTab(103, destinationGroupId);
+  await recentlyClosedStarted;
+  windows[0].tabs = windows[0].tabs.filter((tab) => tab.id !== 103);
+  await controller.onTabRemoved(103, { windowId: 10, isWindowClosing: false });
+  releaseRecentlyClosed();
+  const moved = await move;
+
+  assert.equal(moved.tabs.some((tab) => tab.id === manuallyClosedRecord.id), false,
+    "An inactive-group move must not retain a tab manually closed before its close request.");
+});
+
 test("closing a tab refreshes native grouping for the remaining tabs in its window", async () => {
   const window = normalWindow();
   window.tabs.push({ id: 103, windowId: 10, index: 2, url: "https://second.example", title: "Second" });
@@ -720,7 +833,7 @@ test("rapid tab moves honor the latest destination without leaving a stale close
 test("a failed tab close stays journaled and is replayed after controller restart", async () => {
   const windows = [normalWindow()];
   const first = setup(windows);
-  await first.controller.getState();
+  const initial = await first.controller.getState();
   let destinationId;
   await first.store.update((state) => {
     const next = createGroup(state, { name: "Later" });
@@ -732,6 +845,7 @@ test("a failed tab close stays journaled and is replayed after controller restar
   first.browser.removeTabs = async (ids) => {
     if (failOnce) {
       failOnce = false;
+      await remove(ids);
       throw new Error("injected close failure");
     }
     await remove(ids);
@@ -746,6 +860,11 @@ test("a failed tab close stays journaled and is replayed after controller restar
   assert.equal(recovered.operations.length, 0);
   assert.equal(recovered.activeGroupId, destinationId);
   assert.equal(recovered.tabs.every((tab) => tab.groupId !== destinationId || tab.status === "open"), true);
+  const preservedSnapshot = recovered.tabs.find((tab) => tab.url === "https://one.example");
+  assert.equal(preservedSnapshot.status, "closed",
+    "Recovery must preserve a tab snapshot when the close request may have succeeded before reporting failure.");
+  const restored = await restarted.switchGroup(initial.activeGroupId);
+  assert.equal(restored.state.tabs.find((tab) => tab.id === preservedSnapshot.id).status, "open");
 });
 
 test("moving the clicked unpinned tab to an inactive group closes only that tab", async () => {

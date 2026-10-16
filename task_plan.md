@@ -118,6 +118,7 @@ Deliver the agreed Chromium/Brave group manager in `REQUIREMENTS.md`, initially 
 - [x] Verify browser restart: Both packaged browser runs close and relaunch the same disposable profile, then confirm persisted group state and startup reconciliation.
 - [x] Verify idle suspension: With extension page and worker debugger connections closed, both browsers terminate the MV3 worker after its idle period; reopening the popup wakes it and reads persisted state.
 - [x] Verify recovery paths: Fake-browser tests inject close/delete failures and restart the controller to replay durable operations; browser E2E covers worker termination/wake, idle suspension, and profile restart.
+- [x] Verify manual-close race handling: If a tab disappears during switch preparation, before HiddenTabby issues its close request, discard its stale snapshot; preserve window-close snapshots and snapshots from an already-started recoverable switch. Integration coverage and exact-set assertions in packaged Chromium and Brave E2E pass.
 - [x] Scope exact mid-call worker termination: The harness does not kill the worker at an instruction boundary inside a live browser API call; durable checkpoint/replay tests cover the recovery contract.
 - **Status:** Persistence, interruption recovery, worker wake/suspension, and profile restart are verified at the adapter and browser levels.
 

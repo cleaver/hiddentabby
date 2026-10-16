@@ -196,3 +196,17 @@ No tests run; this phase is requirements research only.
 - Added adapter/controller regressions for close, pin, move, and cross-window membership changes; packaged E2E exercises a real 2-to-1 transition and verifies the restored tab remains in Default without a native group.
 - Final verification after the controller bookkeeping fixes: `npm test` passes 71/71; `npm run test:e2e` passes 3/3 in Chromium 154.0.8037.97; `npm run test:e2e:brave` passes 3/3 in Brave 155.1.97.56 (CDP Chrome/155.0.8059.40). Both browser suites load the packaged extension from disposable profiles and cover restart persistence. Screenshots remain under ignored `test-results/`.
 - See `REQUIREMENTS.md`, `docs/architecture.md`, and `task_plan.md` for the behavior and acceptance criteria.
+
+## Stale Tab Restore Regression (2026-10-15)
+
+- Reproduced a timing bug in a controller integration test: an individually closed tab could disappear from the live browser before its delayed removal event, while a group switch had already snapshotted it as an outgoing tab. The pending switch ignored that event as an expected close, leaving a stale snapshot that could restore the closed tab later.
+- The switch now reconciles its planned closes against live tab IDs in still-open windows and removes missing snapshots before issuing browser closes. A journal marker distinguishes this pre-close reconciliation from recovery after a close request has begun, preserving intentional switch snapshots. Closed-window snapshots remain eligible for restoration.
+- Added integration coverage for the delayed removal race and stricter packaged-browser assertions for exact snapshot/live-tab sets plus manually closed tab absence. The reported duplicate restoration did not reproduce in the real-browser round trips.
+- Verification: `npm test` passes 72/72; `npm run test:e2e` passes 3/3 on Chromium 154.0.8037.97; `npm run test:e2e:brave` passes 3/3 on Brave 155.1.97.56 (CDP Chrome/155.0.8059.40); `git diff --check` passes.
+
+## Manual Close During Switch Regression (2026-10-15)
+
+- Directly closing the MadCSS tab in an isolated browser, restarting the service worker, and switching away and back did not reproduce the report. The tab record disappeared and stayed gone in Chromium and Brave.
+- A controller regression test reproduced a narrower race: if a tab closes while a global switch is preparing, HiddenTabby previously classified its removal as part of the planned switch close before the browser close request had been issued. The stale snapshot then remained eligible for restore.
+- The controller now records removals that arrive before an operation issues its close request, reconciles them against live tabs, and removes those records from the journaled restore payload. Events after the request remain recoverable. The same reconciliation covers tabs moved to an inactive group.
+- Verification: `npm test` passes 74/74; packaged Chromium and Brave E2E each pass 3/3, including MadCSS tab close, service-worker restart, group round-trip, and manual-close-during-move checks; `git diff --check` passes.

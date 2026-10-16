@@ -27,6 +27,9 @@ export class WorkspaceController {
   #store;
   #browser;
   #ready = null;
+  #preCloseTabRemovals = new Map();
+  #closeOperationsPreparing = new Set();
+  #closeRequestsIssued = new Set();
 
   constructor({ store, browser }) {
     if (!store || !browser) throw new Error("WorkspaceController requires state and browser adapters.");
@@ -47,6 +50,7 @@ export class WorkspaceController {
     if (this.#store.snapshot().operations.length) {
       await this.#store.resumePending(this.#recoveryHandlers());
     }
+    this.#cleanupOperationTracking();
     return this.#store.snapshot();
   }
 
@@ -108,6 +112,7 @@ export class WorkspaceController {
       }),
       finalize: (state) => state,
     });
+    this.#cleanupOperationTracking();
     await this.#browser.createMoveMenu(operation.state);
     return { ...operation.result, state: operation.state };
   }
@@ -226,8 +231,17 @@ export class WorkspaceController {
   async onTabRemoved(tabId, removeInfo) {
     await this.initialize();
     const state = this.#store.snapshot();
-    const expectedClose = state.operations.some((operation) => operationClosesTab(operation, state, tabId));
-    if (expectedClose) return state;
+    const expectedOperation = state.operations.find((operation) => operationClosesTab(operation, state, tabId));
+    if (expectedOperation) {
+      if (!removeInfo.isWindowClosing
+        && this.#closeOperationsPreparing.has(expectedOperation.id)
+        && !this.#closeRequestsIssued.has(expectedOperation.id)) {
+        const removedIds = this.#preCloseTabRemovals.get(expectedOperation.id) ?? new Set();
+        removedIds.add(tabId);
+        this.#preCloseTabRemovals.set(expectedOperation.id, removedIds);
+      }
+      return state;
+    }
 
     const removedTab = state.tabs.find((tab) => tab.browserTabId === tabId);
     const updated = await this.#store.update((current) => handleTabRemoved(current, tabId, removeInfo));
@@ -328,6 +342,7 @@ export class WorkspaceController {
       finalize: (state) => state,
     });
 
+    this.#cleanupOperationTracking();
     return { ...operation.result, state: operation.state };
   }
 
@@ -378,6 +393,7 @@ export class WorkspaceController {
       perform: (pending, pendingState, checkpoint) => this.#performMoveOperation(pending, pendingState, checkpoint),
       finalize: (current) => current,
     });
+    this.#cleanupOperationTracking();
     return operation.state;
   }
 
@@ -411,9 +427,13 @@ export class WorkspaceController {
   }
 
   async #performMoveTab(operation, initialState, checkpoint) {
-    const { closeRecord } = operation.payload;
-    const record = initialState.tabs.find((tab) => tab.id === closeRecord.id);
-    const logicalWindow = initialState.windows.find((window) => window.id === closeRecord.windowId);
+    let closeRecord = operation.payload.closeRecord;
+    if (!operation.payload.closeStarted) this.#closeOperationsPreparing.add(operation.id);
+    const closeRecordId = closeRecord.id;
+    let closeRecords = operation.payload.closeRecords ?? [closeRecord];
+    let state = initialState;
+    const record = state.tabs.find((tab) => tab.id === closeRecord.id);
+    const logicalWindow = state.windows.find((window) => window.id === closeRecord.windowId);
     const activeTabsRemain = initialState.tabs.some((tab) => tab.groupId === initialState.activeGroupId
       && tab.windowId === closeRecord.windowId && tab.status === "open");
     if (logicalWindow?.isOpen && logicalWindow.placeholderTabId === null && !activeTabsRemain) {
@@ -421,25 +441,125 @@ export class WorkspaceController {
       await checkpoint((state) => setWindowPlaceholder(state, logicalWindow.browserWindowId, placeholder.id));
     }
     const oldSessions = await this.#browser.getRecentlyClosed().catch(() => []);
-    const tabIds = new Set(operation.payload.closingTabIds ?? []);
+    let tabIds = new Set(operation.payload.closingTabIds ?? []);
     if (record?.status === "open" && Number.isInteger(record.browserTabId)) tabIds.add(record.browserTabId);
+    if (!operation.payload.closeStarted) {
+      state = await checkpoint((current) => ({
+        ...current,
+        operations: current.operations.map((pending) => pending.id === operation.id
+          ? { ...pending, payload: { ...pending.payload, closeStarted: true } }
+          : pending),
+      }));
+    }
+    let reconciliation;
+    while (true) {
+      reconciliation = await this.#reconcilePlannedCloses(
+        operation,
+        state,
+        closeRecords,
+        tabIds,
+        checkpoint,
+        !operation.payload.closeStarted,
+      );
+      state = reconciliation.state;
+      closeRecords = reconciliation.closeRecords;
+      closeRecord = reconciliation.closeRecords.find((item) => item.id === closeRecordId) ?? null;
+      tabIds = reconciliation.closingTabIds;
+      const earlyRemovals = this.#preCloseTabRemovals.get(operation.id);
+      if (!closeRecords.some((item) => earlyRemovals?.has(item.browserTabId))) {
+        this.#closeRequestsIssued.add(operation.id);
+        break;
+      }
+    }
     await this.#browser.removeTabs([...tabIds]);
-    await this.#browser.groupManagedTabs(
-      this.#store.snapshot(),
-      closeRecord.groupId,
-      closeRecord.browserWindowId,
-    );
+    if (closeRecord) {
+      await this.#browser.groupManagedTabs(
+        this.#store.snapshot(),
+        closeRecord.groupId,
+        closeRecord.browserWindowId,
+      );
+    }
     const newSessions = (await this.#browser.getRecentlyClosed().catch(() => []))
       .filter((session) => session.tab?.sessionId
         && !oldSessions.some((old) => old.tab?.sessionId === session.tab.sessionId));
-    const sessionId = matchClosedSessions([closeRecord], newSessions).get(closeRecord.id);
+    const sessionId = closeRecord
+      ? matchClosedSessions([closeRecord], newSessions).get(closeRecord.id)
+      : null;
     if (sessionId) {
       await checkpoint((state) => ({
         ...state,
         tabs: state.tabs.map((tab) => tab.id === closeRecord.id ? { ...tab, sessionId } : tab),
       }));
     }
-    return { closedTabId: closeRecord.browserTabId, sessionId: sessionId ?? null };
+    return { closedTabId: closeRecord?.browserTabId ?? null, sessionId: sessionId ?? null };
+  }
+
+  async #reconcilePlannedCloses(
+    operation,
+    initialState,
+    closeRecords,
+    closingTabIds,
+    checkpoint,
+    includeMissingLive,
+    liveWindows = null,
+  ) {
+    const windows = liveWindows ?? await this.#browser.getNormalWindows();
+    const liveWindowIds = new Set(windows.map((window) => window.id));
+    const liveTabIds = new Set(windows.flatMap((window) => window.tabs ?? []).map((tab) => tab.id));
+    const earlyRemovals = this.#preCloseTabRemovals.get(operation.id) ?? new Set();
+    const missingRecords = closeRecords.filter((record) => Number.isInteger(record.browserTabId)
+      && (earlyRemovals.has(record.browserTabId)
+        || (includeMissingLive && liveWindowIds.has(record.browserWindowId)
+          && !liveTabIds.has(record.browserTabId))));
+    const missingRecordIds = new Set(missingRecords.map((record) => record.id));
+    const missingBrowserTabIds = new Set(missingRecords.map((record) => record.browserTabId));
+    const nextCloseRecords = closeRecords.filter((record) => !missingRecordIds.has(record.id));
+    const nextClosingTabIds = new Set([...closingTabIds].filter((tabId) =>
+      !earlyRemovals.has(tabId) && (!includeMissingLive || liveTabIds.has(tabId))));
+    const operationPayload = operation.payload;
+    const payloadCloseIds = operationPayload.closingTabIds ?? [];
+    const payloadChanged = nextCloseRecords.length !== closeRecords.length
+      || payloadCloseIds.length !== nextClosingTabIds.size
+      || payloadCloseIds.some((tabId) => !nextClosingTabIds.has(tabId))
+      || missingRecordIds.has(operationPayload.closeRecord?.id);
+
+    if (!payloadChanged) {
+      return { state: initialState, closeRecords: nextCloseRecords, closingTabIds: nextClosingTabIds };
+    }
+
+    const nextState = await checkpoint((current) => ({
+      ...current,
+      tabs: current.tabs.filter((tab) => !missingRecordIds.has(tab.id)),
+      operations: current.operations.map((pending) => pending.id === operation.id
+        ? {
+          ...pending,
+          payload: {
+            ...pending.payload,
+            closeRecords: nextCloseRecords,
+            closingTabIds: [...nextClosingTabIds],
+            closeRecord: missingRecordIds.has(pending.payload.closeRecord?.id)
+              ? null
+              : pending.payload.closeRecord,
+          },
+        }
+        : pending),
+    }));
+    for (const tabId of missingBrowserTabIds) earlyRemovals.delete(tabId);
+    if (!earlyRemovals.size) this.#preCloseTabRemovals.delete(operation.id);
+    return { state: nextState, closeRecords: nextCloseRecords, closingTabIds: nextClosingTabIds };
+  }
+
+  #cleanupOperationTracking() {
+    const pendingOperationIds = new Set(this.#store.snapshot().operations.map((operation) => operation.id));
+    for (const operationId of this.#preCloseTabRemovals.keys()) {
+      if (!pendingOperationIds.has(operationId)) this.#preCloseTabRemovals.delete(operationId);
+    }
+    for (const operationId of this.#closeOperationsPreparing) {
+      if (!pendingOperationIds.has(operationId)) this.#closeOperationsPreparing.delete(operationId);
+    }
+    for (const operationId of this.#closeRequestsIssued) {
+      if (!pendingOperationIds.has(operationId)) this.#closeRequestsIssued.delete(operationId);
+    }
   }
 
   async #performMoveOperation(operation, state, checkpoint) {
@@ -463,12 +583,28 @@ export class WorkspaceController {
 
   async #performGroupSwitch(operation, initialState, checkpoint) {
     if (operation.payload.noop) return { failures: [], restoredCount: 0 };
+    if (!operation.payload.closeStarted) this.#closeOperationsPreparing.add(operation.id);
     const destinationGroupId = operation.payload.destinationGroupId;
-    const closeRecords = operation.payload.closeRecords ?? [];
+    let closeRecords = operation.payload.closeRecords ?? [];
     let state = initialState;
     const failures = [];
     const liveWindows = await this.#browser.getNormalWindows();
-    const closingTabIds = new Set(operation.payload.closingTabIds ?? []);
+    const liveWindowIds = new Set(liveWindows.map((window) => window.id));
+    const liveTabIds = new Set(liveWindows.flatMap((window) => window.tabs ?? []).map((tab) => tab.id));
+    let closingTabIds = new Set((operation.payload.closingTabIds ?? [])
+      .filter((tabId) => operation.payload.closeStarted || liveTabIds.has(tabId)));
+    let reconciliation = await this.#reconcilePlannedCloses(
+      operation,
+      state,
+      closeRecords,
+      closingTabIds,
+      checkpoint,
+      !operation.payload.closeStarted,
+      liveWindows,
+    );
+    state = reconciliation.state;
+    closeRecords = reconciliation.closeRecords;
+    closingTabIds = reconciliation.closingTabIds;
     for (const closeRecord of closeRecords) {
       const currentRecord = state.tabs.find((tab) => tab.id === closeRecord.id);
       if (currentRecord?.status === "open" && currentRecord.groupId !== destinationGroupId
@@ -525,6 +661,34 @@ export class WorkspaceController {
     }
 
     const recentlyClosedBefore = await this.#browser.getRecentlyClosed().catch(() => []);
+    if (!operation.payload.closeStarted) {
+      state = await checkpoint((current) => ({
+        ...current,
+        operations: current.operations.map((pending) => pending.id === operation.id
+          ? { ...pending, payload: { ...pending.payload, closeStarted: true } }
+          : pending),
+      }));
+    }
+    while (true) {
+      const currentLiveWindows = await this.#browser.getNormalWindows();
+      reconciliation = await this.#reconcilePlannedCloses(
+        operation,
+        state,
+        closeRecords,
+        closingTabIds,
+        checkpoint,
+        !operation.payload.closeStarted,
+        currentLiveWindows,
+      );
+      state = reconciliation.state;
+      closeRecords = reconciliation.closeRecords;
+      closingTabIds = reconciliation.closingTabIds;
+      const earlyRemovals = this.#preCloseTabRemovals.get(operation.id);
+      if (!closeRecords.some((record) => earlyRemovals?.has(record.browserTabId))) {
+        this.#closeRequestsIssued.add(operation.id);
+        break;
+      }
+    }
     try {
       await this.#browser.removeTabs([...closingTabIds]);
     } catch (error) {
@@ -927,6 +1091,10 @@ function pendingDeleteTabIds(state, liveWindows) {
 
 function operationClosesTab(operation, state, browserTabId) {
   if (operation.payload.closingTabIds?.includes(browserTabId)) return true;
+  const closesRecords = operation.type === "switch-group"
+    || operation.type === "delete-group"
+    || operation.payload.shouldClose;
+  if (!closesRecords) return false;
   const records = [...(operation.payload.closeRecords ?? []), operation.payload.closeRecord]
     .filter(Boolean);
   return records.some((record) => record.browserTabId === browserTabId

@@ -362,18 +362,18 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
       "real tab unpinning adoption",
     );
 
-    const manualCloseProbeId = await popup.client.evaluate(
-      "chrome.tabs.create({url:'data:text/html,<title>Manual close probe</title>',active:false}).then((tab)=>tab.id)",
+    const manualCloseProbe = await popup.client.evaluate(
+      "chrome.tabs.create({url:'data:text/html,<title>Manual close probe</title>',active:false}).then((tab)=>({id:tab.id,url:tab.url}))",
     );
     await waitFor(
       () => readState(popup.client),
-      (state) => state.tabs.some((tab) => tab.browserTabId === manualCloseProbeId),
+      (state) => state.tabs.some((tab) => tab.browserTabId === manualCloseProbe.id),
       "manual-close probe adoption",
     );
-    await popup.client.evaluate("chrome.tabs.remove(" + manualCloseProbeId + ")");
+    await popup.client.evaluate("chrome.tabs.remove(" + manualCloseProbe.id + ")");
     await waitFor(
       () => readState(popup.client),
-      (state) => !state.tabs.some((tab) => tab.browserTabId === manualCloseProbeId),
+      (state) => !state.tabs.some((tab) => tab.browserTabId === manualCloseProbe.id),
       "manual tab close removes its record",
     );
 
@@ -497,7 +497,7 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
     );
     assert.ok(dormantState.tabs.some((tab) => tab.id === dormantRecordBeforeClose.id
       && tab.groupId === defaultGroup.id && tab.status === "closed"));
-    const originalDefaultRecordIds = stateBeforeSwitch.tabs
+    const originalDefaultRecordIds = dormantState.tabs
       .filter((tab) => tab.groupId === defaultGroup.id)
       .map((tab) => tab.id);
     await clickGroup(popup.client, "Group B");
@@ -560,6 +560,30 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
       "global restore of Default tabs",
       25000,
     );
+    const restoredDefaultRecordIds = restoredDefaultState.tabs
+      .filter((tab) => tab.groupId === defaultGroup.id && tab.status === "open")
+      .map((tab) => tab.id)
+      .sort();
+    const unexpectedDefaultRecords = restoredDefaultState.tabs
+      .filter((tab) => tab.groupId === defaultGroup.id && tab.status === "open"
+        && !originalDefaultRecordIds.includes(tab.id))
+      .map(({ id, url, title, browserTabId, browserWindowId, index, sessionId }) => ({
+        id, url, title, browserTabId, browserWindowId, index, sessionId,
+      }));
+    assert.deepEqual(restoredDefaultRecordIds, [...originalDefaultRecordIds].sort(),
+      "Switching from a new empty group must restore exactly the Default snapshots captured before switching. "
+        + "Unexpected records: " + JSON.stringify(unexpectedDefaultRecords));
+    const defaultLiveTabIds = await popup.client.evaluate("chrome.tabs.query({}).then((tabs)=>tabs.filter((tab)=>!tab.pinned&&!tab.url?.includes('/placeholder.html')&&!tab.pendingUrl?.includes('/placeholder.html')).map((tab)=>tab.id).sort((a,b)=>a-b))");
+    const defaultSnapshotTabIds = restoredDefaultState.tabs
+      .filter((tab) => tab.groupId === defaultGroup.id && tab.status === "open")
+      .map((tab) => tab.browserTabId)
+      .sort((a, b) => a - b);
+    assert.deepEqual(defaultLiveTabIds, defaultSnapshotTabIds,
+      "Every live unpinned non-placeholder tab after restoring Default must have exactly one pre-existing snapshot.");
+    const manuallyClosedTabs = await popup.client.evaluate("chrome.tabs.query({}).then((tabs)=>tabs.filter((tab)=>tab.url==="
+      + JSON.stringify(manualCloseProbe.url)
+      + ").map((tab)=>({id:tab.id,url:tab.url})))");
+    assert.deepEqual(manuallyClosedTabs, [], "A manually closed tab must stay gone across a group switch.");
     const restoredDormantWindow = restoredDefaultState.windows.find(
       (window) => window.id === dormantRecordBeforeClose.windowId,
     );
@@ -852,6 +876,75 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
         "Each open window should have exactly its one recorded placeholder.");
     }
     assert.ok(finalBrowserEvidence.pinned >= 3, "Pinned tabs should survive switching and remain excluded.");
+
+    const madcssTab = await popup.client.evaluate("chrome.tabs.create({windowId:" + firstWindowId
+      + ",url:'https://www.madcss.com/',active:false}).then((tab)=>({id:tab.id,url:tab.url,windowId:tab.windowId}))");
+    const madcssStateBeforeClose = await waitFor(
+      () => readState(popup.client),
+      (state) => state.tabs.some((tab) => tab.browserTabId === madcssTab.id
+        && tab.status === "open" && tab.url.includes("madcss.com")),
+      "madcss.com tab adopted before close",
+    );
+    const madcssRecord = madcssStateBeforeClose.tabs.find((tab) => tab.browserTabId === madcssTab.id);
+    const madcssTarget = await waitFor(async () => (await browserTargets(endpointUrl))
+      .find((target) => target.type === "page" && target.url.includes("madcss.com")) ?? null,
+    Boolean, "madcss.com browser page target");
+    await popup.client.evaluate("window.__madcssCloseTrace=[];chrome.tabs.onRemoved.addListener((id,info)=>{if(id==="
+      + madcssTab.id
+      + ")window.__madcssCloseTrace.push({event:'tab-removed',id,isWindowClosing:info.isWindowClosing,windowId:info.windowId});});chrome.tabs.onCreated.addListener((tab)=>{if(tab.url?.includes('madcss.com')||tab.pendingUrl?.includes('madcss.com'))window.__madcssCloseTrace.push({event:'tab-created',id:tab.id,url:tab.url,pendingUrl:tab.pendingUrl});});");
+    const closeResult = await browserClient.send("Target.closeTarget", { targetId: madcssTarget.id });
+    assert.equal(closeResult.success, true, "The browser must close the actual madcss.com tab target.");
+    const madcssStateAfterClose = await waitFor(
+      () => readState(popup.client),
+      (state) => !state.tabs.some((tab) => tab.id === madcssRecord.id
+        || tab.browserTabId === madcssTab.id || tab.url.includes("madcss.com")),
+      "madcss.com browser close removes its HiddenTabby record",
+    );
+    await wait(500);
+    assert.equal(await popup.client.evaluate("chrome.tabs.query({}).then((tabs)=>tabs.some((tab)=>tab.url?.includes('madcss.com')))") , false,
+      "The original madcss.com browser tab should be gone after Target.closeTarget.");
+    const workerBeforeRestart = await waitFor(async () => (await browserTargets(endpointUrl))
+      .find((target) => target.type === "service_worker"
+        && target.url === "chrome-extension://" + extensionId + "/src/service-worker.js") ?? null,
+    Boolean, "service worker before madcss.com removal restart check");
+    await browserClient.send("Target.closeTarget", { targetId: workerBeforeRestart.id });
+    await waitFor(async () => !(await browserTargets(endpointUrl))
+      .some((target) => target.id === workerBeforeRestart.id), Boolean,
+    "service worker stops after madcss.com removal");
+    const madcssStateAfterRestart = await readState(popup.client);
+    assert.equal(madcssStateAfterRestart.tabs.some((tab) => tab.id === madcssRecord.id
+      || tab.url.includes("madcss.com")), false,
+    "Startup reconciliation should not restore a manually closed madcss.com tab.");
+    const reproGroupResponse = await popup.client.evaluate("chrome.runtime.sendMessage({type:'group:create',details:{name:'Close Tab Repro'}})");
+    assert.equal(reproGroupResponse.ok, true, reproGroupResponse.error);
+    const reproGroup = reproGroupResponse.value.groups.find((group) => group.name === "Close Tab Repro");
+    const switchAwayResponse = await popup.client.evaluate("chrome.runtime.sendMessage({type:'group:switch',groupId:" + JSON.stringify(reproGroup.id) + "})");
+    assert.equal(switchAwayResponse.ok, true, switchAwayResponse.error);
+    await waitFor(() => readState(popup.client), (state) => state.activeGroupId === reproGroup.id,
+      "switch away from the closed madcss.com tab");
+    const switchBackResponse = await popup.client.evaluate("chrome.runtime.sendMessage({type:'group:switch',groupId:" + JSON.stringify(replacementDefault.id) + "})");
+    assert.equal(switchBackResponse.ok, true, switchBackResponse.error);
+    const madcssStateAfterReturn = await waitFor(
+      () => readState(popup.client),
+      (state) => state.activeGroupId === replacementDefault.id && state.operations.length === 0,
+      "return to Default after closing madcss.com",
+    );
+    assert.equal(madcssStateAfterClose.tabs.some((tab) => tab.id === madcssRecord.id
+      || tab.url.includes("madcss.com")), false);
+    assert.equal(madcssStateAfterReturn.tabs.some((tab) => tab.id === madcssRecord.id
+      || tab.url.includes("madcss.com")), false,
+    "Switching away and back must not recreate a manually closed madcss.com tab.");
+    assert.equal(await popup.client.evaluate("chrome.tabs.query({}).then((tabs)=>tabs.some((tab)=>tab.url?.includes('madcss.com')))") , false,
+      "The madcss.com page must remain closed after the workspace round trip.");
+    t.diagnostic("madcss.com removal events: "
+      + JSON.stringify(await popup.client.evaluate("window.__madcssCloseTrace")));
+    t.diagnostic("madcss.com close result: "
+      + JSON.stringify({ browserTabId: madcssTab.id, recordId: madcssRecord.id,
+        before: madcssStateBeforeClose.tabs.some((tab) => tab.browserTabId === madcssTab.id),
+        afterClose: madcssStateAfterClose.tabs.some((tab) => tab.id === madcssRecord.id),
+        afterRestart: madcssStateAfterRestart.tabs.some((tab) => tab.id === madcssRecord.id),
+        afterSwitch: madcssStateAfterReturn.tabs.some((tab) => tab.id === madcssRecord.id) }));
+
     t.diagnostic("Browser: " + endpoint.version.Browser);
     t.diagnostic("Loaded artifact: " + archive);
     t.diagnostic("Extension id: " + extensionId);
@@ -976,6 +1069,34 @@ test("packaged group state survives a browser restart", { timeout: 90000 }, asyn
       "initial group state",
     );
     const defaultGroup = beforeRestart.groups.find((group) => group.name === "Default");
+    const popupControllerTabId = await popupClient.evaluate("chrome.tabs.getCurrent().then((tab)=>tab.id)");
+    await popupClient.evaluate("chrome.tabs.update(" + popupControllerTabId + ", {pinned:true})");
+    await waitFor(
+      () => readState(popupClient),
+      (state) => !state.tabs.some((tab) => tab.browserTabId === popupControllerTabId)
+        && state.windows.some((window) => window.pinnedTabIds.includes(popupControllerTabId)),
+      "pin test controller tab before real popup switching",
+    );
+    const popupSwitchTabs = await popupClient.evaluate("(async()=>{const tabs=[];for(const title of ['Popup Switch One','Popup Switch Two','Manually Closed Before Switch'])tabs.push(await chrome.tabs.create({url:'data:text/html,<title>'+title+'</title>',active:false}));return tabs.map((tab)=>({id:tab.id,url:tab.url}));})()");
+    const popupTabsBeforeSwitch = await waitFor(
+      () => readState(popupClient),
+      (state) => popupSwitchTabs.every((tab) => state.tabs.some((item) => item.browserTabId === tab.id
+        && item.groupId === defaultGroup.id && item.status === "open")),
+      "real-popup switch tabs adopted into Default",
+    );
+    const manuallyClosedPopupTab = popupSwitchTabs[2];
+    await popupClient.evaluate("chrome.tabs.remove(" + manuallyClosedPopupTab.id + ")");
+    await waitFor(
+      () => readState(popupClient),
+      (state) => !state.tabs.some((tab) => tab.browserTabId === manuallyClosedPopupTab.id),
+      "manually closed popup-switch tab forgotten",
+    );
+    const expectedPopupRestoreIds = popupTabsBeforeSwitch.tabs
+      .filter((tab) => tab.groupId === defaultGroup.id && tab.status === "open"
+        && tab.browserTabId !== manuallyClosedPopupTab.id)
+      .map((tab) => tab.id);
+    const manuallyClosedPopupUrl = popupTabsBeforeSwitch.tabs
+      .find((tab) => tab.browserTabId === manuallyClosedPopupTab.id)?.url ?? manuallyClosedPopupTab.url;
     const createResponse = await popupClient.evaluate(
       "chrome.runtime.sendMessage({type:'group:create',details:{name:'Persistent after restart'}})",
     );
@@ -1039,9 +1160,77 @@ test("packaged group state survives a browser restart", { timeout: 90000 }, asyn
     );
     assert.equal(actionPopupGroupState.activeGroupId, defaultGroup.id,
       "Creating a group in the action popup must not activate it.");
+    const actionPopupCheckGroup = actionPopupGroupState.groups.find((group) => group.name === "Action Popup Check");
+    async function clickRealActionPopupGroup(client, groupName) {
+      await waitFor(
+        () => client.evaluate("[...document.querySelectorAll('.group-choice .group-name')].some((item)=>item.textContent==="
+          + JSON.stringify(groupName)
+          + ")"),
+        Boolean,
+        "action popup renders " + groupName,
+      );
+      const point = await client.evaluate("(() => { const button=[...document.querySelectorAll('.group-choice')].find((item)=>item.querySelector('.group-name')?.textContent==="
+        + JSON.stringify(groupName)
+        + "); if(!button)throw new Error('Action popup group missing: '+"
+        + JSON.stringify(groupName)
+        + "); const rect=button.getBoundingClientRect(); return {x:rect.left+rect.width/2,y:rect.top+rect.height/2}; })()");
+      await client.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: point.x, y: point.y });
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mousePressed", x: point.x, y: point.y, button: "left", clickCount: 1,
+      });
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mouseReleased", x: point.x, y: point.y, button: "left", clickCount: 1,
+      });
+    }
+    await clickRealActionPopupGroup(actionPopupPage, "Action Popup Check");
+    const switchedFromActionPopup = await waitFor(
+      () => readState(popupClient),
+      (state) => state.activeGroupId === actionPopupCheckGroup.id
+        && expectedPopupRestoreIds.every((recordId) => state.tabs.find((tab) => tab.id === recordId)?.status === "closed"),
+      "switch to the new empty group from the real action popup",
+      25000,
+    );
+    assert.equal(switchedFromActionPopup.tabs.filter((tab) => tab.groupId === defaultGroup.id
+      && tab.status === "closed").length, expectedPopupRestoreIds.length);
     actionPopupPage.close();
+    await currentBrowser.client.send("Target.closeTarget", { targetId: actionPopupTarget.id }).catch(() => undefined);
+    await actionPopupWorker.evaluate(
+      "chrome.action.openPopup({windowId:" + actionPopupWindowId + "}).then(()=>true)",
+    );
+    const restorePopupTarget = await waitFor(async () => (await browserTargets(currentBrowser.endpointUrl))
+      .find((target) => target.id !== initialPopup.target.id
+        && target.url === "chrome-extension://" + currentBrowser.extensionId + "/popup.html") ?? null,
+    Boolean, "real action popup reopened to restore Default");
+    const restorePopupPage = await DevToolsClient.connect(restorePopupTarget.webSocketDebuggerUrl);
+    await waitFor(() => restorePopupPage.evaluate("document.readyState"),
+      (value) => value === "complete", "restore action popup page load");
+    await clickRealActionPopupGroup(restorePopupPage, "Default");
+    const restoredFromActionPopup = await waitFor(
+      () => readState(popupClient),
+      (state) => state.activeGroupId === defaultGroup.id
+        && expectedPopupRestoreIds.every((recordId) => state.tabs.find((tab) => tab.id === recordId)?.status === "open"),
+      "restore Default from the real action popup",
+      25000,
+    );
+    const restoredPopupRecordIds = restoredFromActionPopup.tabs
+      .filter((tab) => tab.groupId === defaultGroup.id && tab.status === "open")
+      .map((tab) => tab.id)
+      .sort();
+    assert.deepEqual(restoredPopupRecordIds, [...expectedPopupRestoreIds].sort(),
+      "A real action-popup round trip must not create duplicate Default snapshots.");
+    const restoredPopupLiveTabs = await popupClient.evaluate("chrome.tabs.query({windowId:" + actionPopupWindowId
+      + "}).then((tabs)=>tabs.filter((tab)=>!tab.pinned&&!tab.url?.includes('/placeholder.html')&&!tab.pendingUrl?.includes('/placeholder.html')).map((tab)=>({id:tab.id,url:tab.url})))");
+    const restoredPopupSnapshotIds = restoredFromActionPopup.tabs
+      .filter((tab) => tab.groupId === defaultGroup.id && tab.status === "open")
+      .map((tab) => tab.browserTabId)
+      .sort((a, b) => a - b);
+    assert.deepEqual(restoredPopupLiveTabs.map((tab) => tab.id).sort((a, b) => a - b), restoredPopupSnapshotIds,
+      "Every live unpinned tab in the action-popup window must match exactly one Default snapshot.");
+    assert.equal(restoredPopupLiveTabs.some((tab) => tab.url === manuallyClosedPopupUrl), false,
+      "A manually closed tab must remain gone after real action-popup switching.");
+    restorePopupPage.close();
+    await currentBrowser.client.send("Target.closeTarget", { targetId: restorePopupTarget.id }).catch(() => undefined);
     actionPopupWorker.close();
-    await currentBrowser.client.send("Target.closeTarget", { targetId: actionPopupTarget.id });
 
     const serviceWorkerTarget = (await browserTargets(currentBrowser.endpointUrl))
       .find((target) => target.type === "service_worker"
