@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.4 — 2026-10-16
+
+- Add the MIT license to the repository and downloadable extension package.
+
 ## 0.1.3 — 2026-10-16
 
 - Use a high-resolution logo in the workspace manager.

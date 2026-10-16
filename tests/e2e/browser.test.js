@@ -840,12 +840,16 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
     await managerAgainClient.send("Emulation.setDeviceMetricsOverride", {
       width: 1280, height: 900, deviceScaleFactor: 2, mobile: false,
     });
-    const retinaLogo = await managerAgainClient.evaluate(`(() => {
-      const image = document.querySelector(".brand-mark img");
-      const rect = image.getBoundingClientRect();
-      return { complete: image.complete, naturalWidth: image.naturalWidth,
-        cssWidth: rect.width, devicePixelRatio: window.devicePixelRatio };
-    })()`);
+    const retinaLogo = await waitFor(
+      () => managerAgainClient.evaluate(`(() => {
+        const image = document.querySelector(".brand-mark img");
+        const rect = image.getBoundingClientRect();
+        return { complete: image.complete, naturalWidth: image.naturalWidth,
+          cssWidth: rect.width, devicePixelRatio: window.devicePixelRatio };
+      })()`),
+      (image) => image.complete && image.naturalWidth > 0,
+      "high-resolution manager logo image",
+    );
     assert.equal(retinaLogo.complete, true, "The high-resolution manager logo should load.");
     assert.equal(retinaLogo.devicePixelRatio, 2);
     assert.ok(retinaLogo.naturalWidth >= retinaLogo.cssWidth * retinaLogo.devicePixelRatio,

@@ -7,6 +7,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const outputDirectory = resolve(root, "dist");
 const archive = resolve(outputDirectory, "HiddenTabby.zip");
 const extensionFiles = [
+  "LICENSE",
   "manifest.json",
   "popup.html",
   "popup.css",
@@ -31,4 +32,4 @@ const extensionFiles = [
 await mkdir(outputDirectory, { recursive: true });
 await rm(archive, { force: true });
 execFileSync("zip", ["-q", "-r", archive, ...extensionFiles], { cwd: root, stdio: "inherit" });
-process.stdout.write(`Created dist/HiddenTabby.zip with ${extensionFiles.length} extension files.\n`);
+process.stdout.write(`Created dist/HiddenTabby.zip with ${extensionFiles.length} files.\n`);

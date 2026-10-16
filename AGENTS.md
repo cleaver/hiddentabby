@@ -14,8 +14,8 @@ Use two spaces for HTML, CSS, and JavaScript indentation. Keep JavaScript in sep
 
 ## Testing
 
-No automated test framework is configured. For UI or API changes, load the extension in both Chrome and Brave and check the affected behavior on a regular webpage. Also check browser-internal pages when changing active-tab handling; those pages may restrict extension access. Request only the permissions needed for the feature.
+Run `npm test` for unit and integration tests, `npm run test:e2e` for packaged Chromium browser tests, and `npm run test:e2e:brave` for Brave. For UI or API changes, load the extension in both Chrome and Brave and check the affected behavior on a regular webpage. Also check browser-internal pages when changing active-tab handling; those pages may restrict extension access. Request only the permissions needed for the feature.
 
-## Commits and Pull Requests
+## Changelog, Commits, and Pull Requests
 
-This fresh repository has no commit history to establish existing conventions. Use short Conventional Commit subjects, such as feat: add tab actions or fix: handle missing page titles. When bumping the version in **manifest.json**, create and push the matching Git tag (for example, `v0.1.3`); the release workflow builds and publishes only when the tag matches the manifest version. Pull requests should describe the user-visible change, list the browsers checked, include a screenshot for popup changes, and explain any manifest permission changes.
+Record user-visible changes under **Unreleased** in **CHANGELOG.md** as they are made. When releasing, date and version that section alongside the version bump in **manifest.json**, then create and push the matching Git tag (for example, `v0.1.4`). Use short Conventional Commit subjects, such as `feat: add tab actions` or `fix: handle missing page titles`. Pull requests should describe the user-visible change, list the browsers checked, include a screenshot for popup changes, and explain any manifest permission changes.
