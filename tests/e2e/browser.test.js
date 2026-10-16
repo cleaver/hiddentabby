@@ -241,9 +241,12 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
     Boolean, "side-panel manager page opened by the popup action");
     const sidePanelClient = await DevToolsClient.connect(sidePanelTarget.webSocketDebuggerUrl);
     browserClients.push(sidePanelClient);
-    await waitFor(() => sidePanelClient.evaluate("document.readyState"),
-      (value) => value === "complete", "side-panel manager page load");
-    assert.match(await sidePanelClient.evaluate("document.querySelector('h1')?.textContent"), /HiddenTabby/);
+    const sidePanelHeading = await waitFor(
+      () => sidePanelClient.evaluate("document.querySelector('h1')?.textContent ?? null"),
+      (value) => value === "HiddenTabby",
+      "side-panel manager heading",
+    );
+    assert.equal(sidePanelHeading, "HiddenTabby");
     const expectedBrave = /brave/i.test(browserPath) || /Brave/i.test(endpoint.version.Browser);
     const braveControls = await waitFor(
       () => sidePanelClient.evaluate("(async()=>({isBrave:Boolean(await navigator.brave?.isBrave?.()),cardHidden:document.querySelector('#brave-container-card').hidden,helpHidden:document.querySelector('#brave-containers-help').hidden}))()"),
