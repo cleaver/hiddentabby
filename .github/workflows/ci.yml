@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          package-manager-cache: false
+
+      - name: Run unit and integration tests
+        run: npm test
+
+      - name: Run Chromium end-to-end tests
+        run: npm run test:e2e
+        env:
+          BROWSER_BIN: /usr/bin/chromium
+
+      - name: Check packaged ZIP
+        run: unzip -t dist/HiddenTabby.zip
+
+      - name: Upload extension ZIP
+        uses: actions/upload-artifact@v7
+        with:
+          path: dist/HiddenTabby.zip
+          if-no-files-found: error
+          retention-days: 30
+          archive: false
