@@ -247,6 +247,54 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
       "side-panel manager heading",
     );
     assert.equal(sidePanelHeading, "HiddenTabby");
+    await sidePanelClient.send("Emulation.setDeviceMetricsOverride", {
+      width: 320, height: 900, deviceScaleFactor: 1, mobile: false,
+    });
+    await waitFor(
+      () => sidePanelClient.evaluate('Boolean(document.querySelector(".group-card .color-palette"))'),
+      Boolean,
+      "side-panel color palette rendered",
+    );
+    const initialColorPalette = await sidePanelClient.evaluate(`(() => {
+      const card = [...document.querySelectorAll(".group-card")]
+        .find((item) => item.querySelector(".group-title")?.textContent === "Default");
+      const palette = card?.querySelector(".color-palette");
+      if (!palette) return null;
+      const box = palette.getBoundingClientRect();
+      const choices = [...palette.querySelectorAll('input[type="radio"]')].map((input) => {
+        const target = input.closest("label").getBoundingClientRect();
+        return { color: input.value, checked: input.checked, width: target.width, height: target.height };
+      });
+      return { width: box.width, scrollWidth: palette.scrollWidth, clientWidth: palette.clientWidth, choices };
+    })()`);
+    assert.ok(initialColorPalette, "The side panel should keep the group color choices visible.");
+    assert.equal(initialColorPalette.choices.length, 9);
+    assert.ok(initialColorPalette.choices.every((choice) => choice.width >= 28 && choice.height >= 28),
+      "Each color should have a usable target at side-panel width: " + JSON.stringify(initialColorPalette));
+    assert.ok(initialColorPalette.scrollWidth <= initialColorPalette.clientWidth,
+      "The color palette should fit in the side panel: " + JSON.stringify(initialColorPalette));
+    await sidePanelClient.evaluate(`(() => {
+      const purple = [...document.querySelectorAll(".group-card")]
+        .find((item) => item.querySelector(".group-title")?.textContent === "Default")
+        ?.querySelector('.color-palette input[value="purple"]');
+      if (!purple) throw new Error("Purple color choice is missing.");
+      purple.click();
+    })()`);
+    const recoloredDefault = await waitFor(
+      () => sidePanelClient.evaluate(`(async () => {
+        const response = await chrome.runtime.sendMessage({type:"state:get"});
+        const state = response?.value;
+        const group = state?.groups.find((item) => item.name === "Default");
+        const card = [...document.querySelectorAll(".group-card")]
+          .find((item) => item.querySelector(".group-title")?.textContent === "Default");
+        const palette = card?.querySelector(".color-palette");
+        return { color: group?.color, choiceCount: palette?.querySelectorAll('input[type="radio"]').length,
+          selected: palette?.querySelector('input[type="radio"]:checked')?.value };
+      })()`),
+      (result) => result?.color === "purple" && result.choiceCount === 9 && result.selected === "purple",
+      "persistent side-panel color selection",
+    );
+    assert.equal(recoloredDefault.color, "purple");
     const expectedBrave = /brave/i.test(browserPath) || /Brave/i.test(endpoint.version.Browser);
     const braveControls = await waitFor(
       () => sidePanelClient.evaluate("(async()=>({isBrave:Boolean(await navigator.brave?.isBrave?.()),cardHidden:document.querySelector('#brave-container-card').hidden,helpHidden:document.querySelector('#brave-containers-help').hidden}))()"),
@@ -696,6 +744,40 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
     await managerClient.send("Emulation.setDeviceMetricsOverride", {
       width: 1280, height: 900, deviceScaleFactor: 1, mobile: false,
     });
+    await waitFor(
+      () => managerClient.evaluate('document.querySelectorAll(".group-card").length'),
+      (count) => count > 0,
+      "workspace manager group cards rendered",
+    );
+    const managerPaletteLayout = await managerClient.evaluate(`(() => {
+      const card = [...document.querySelectorAll(".group-card")]
+        .find((item) => item.querySelector(".group-title")?.textContent === "Default");
+      const palette = card?.querySelector(".color-palette");
+      const choices = [...(palette?.querySelectorAll(".color-choice") ?? [])];
+      return { count: choices.length, rows: new Set(choices.map((item) => Math.round(item.getBoundingClientRect().top))).size,
+        gap: getComputedStyle(palette).columnGap };
+    })()`);
+    assert.deepEqual(managerPaletteLayout, { count: 9, rows: 1, gap: "4px" },
+      "The full workspace manager should keep the palette compact and on one line at desktop width.");
+    await managerClient.evaluate(`(() => {
+      const card = [...document.querySelectorAll(".group-card")]
+        .find((item) => item.querySelector(".group-title")?.textContent === "Default");
+      const green = card?.querySelector('.color-palette input[value="green"]');
+      if (!green) throw new Error("Green color choice is missing from the workspace manager.");
+      green.click();
+    })()`);
+    const recoloredInManager = await waitFor(
+      () => managerClient.evaluate(`(async () => {
+        const response = await chrome.runtime.sendMessage({type:"state:get"});
+        const group = response?.value?.groups.find((item) => item.name === "Default");
+        const card = [...document.querySelectorAll(".group-card")]
+          .find((item) => item.querySelector(".group-title")?.textContent === "Default");
+        return { color: group?.color, selected: card?.querySelector('.color-palette input:checked')?.value };
+      })()`),
+      (result) => result?.color === "green" && result.selected === "green",
+      "workspace manager color selection",
+    );
+    assert.equal(recoloredInManager.color, "green");
 
     const qaTabUrl = "data:text/html,<title>Chromium QA Tab</title>";
     const moveTarget = await waitFor(
@@ -766,6 +848,15 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
       (count) => count > 0,
       "manager group cards rendered",
     );
+    const managerColorPalette = await managerAgainClient.evaluate(`(() => {
+      const card = [...document.querySelectorAll(".group-card")]
+        .find((item) => item.querySelector(".group-title")?.textContent === "Default");
+      const palette = card?.querySelector(".color-palette");
+      return palette ? { count: palette.querySelectorAll('input[type="radio"]').length,
+        selected: palette.querySelector('input[type="radio"]:checked')?.value } : null;
+    })()`);
+    assert.deepEqual(managerColorPalette, { count: 9, selected: "green" },
+      "The full workspace manager should retain the same persistent group color palette.");
     const accessibilityTree = await managerAgainClient.send("Accessibility.getFullAXTree");
     const buttonNames = accessibilityTree.nodes
       .filter((node) => node.role?.value === "button")

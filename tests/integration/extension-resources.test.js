@@ -33,6 +33,9 @@ test("Manifest V3 permissions and declared extension pages are present", async (
 test("extension pages use local scripts and safe DOM text APIs", async () => {
   for (const page of ["popup.html", "manager.html", "placeholder.html"]) {
     const html = await readFile(resolve(root, page), "utf8");
+    if (page !== "placeholder.html") {
+      assert.match(html, /<img src="icons\/icon48\.png" alt="">/, `${page} should show the project logo`);
+    }
     const scripts = [...html.matchAll(/<script\b[^>]*\bsrc="([^"]+)"[^>]*><\/script>/g)];
     assert.equal(scripts.length, page === "placeholder.html" ? 0 : 1, `${page} should load only its intended script`);
     assert.equal(scripts.every((script) => !script[1].startsWith("http")), true, `${page} must not load remote executable code`);

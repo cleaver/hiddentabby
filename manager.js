@@ -53,17 +53,31 @@ function makeButton(label, className, action, disabled = false) {
   return button;
 }
 
-function makeColorSelect(selectedColor, label) {
-  const select = document.createElement("select");
-  select.setAttribute("aria-label", `Color for ${label}`);
+function makeColorPalette(selectedColor, label, groupId) {
+  const palette = document.createElement("fieldset");
+  palette.className = "color-palette";
+  const legend = document.createElement("legend");
+  legend.className = "sr-only";
+  legend.textContent = `Color for ${label}`;
+  palette.append(legend);
+
   for (const color of colors) {
-    const option = document.createElement("option");
-    option.value = color;
-    option.textContent = `${color[0].toUpperCase()}${color.slice(1)}`;
-    option.selected = color === selectedColor;
-    select.append(option);
+    const choice = document.createElement("label");
+    choice.className = "color-choice";
+    const radio = document.createElement("input");
+    radio.type = "radio";
+    radio.name = `group-color-${groupId}`;
+    radio.value = color;
+    radio.setAttribute("aria-label", `${color[0].toUpperCase()}${color.slice(1)}`);
+    radio.checked = color === selectedColor;
+    const swatch = document.createElement("span");
+    swatch.className = "color-swatch";
+    swatch.style.setProperty("--swatch-color", colorValues[color]);
+    swatch.setAttribute("aria-hidden", "true");
+    choice.append(radio, swatch);
+    palette.append(choice);
   }
-  return select;
+  return palette;
 }
 
 async function refreshAfter(action, successMessage) {
@@ -119,13 +133,13 @@ function makeGroupCard(group, index, state) {
     renameInput.disabled = true;
     renameInput.title = "Keep one group named Default at all times.";
   }
-  const colorSelect = makeColorSelect(group.color, group.name);
+  const colorPalette = makeColorPalette(group.color, group.name, group.id);
   const renameButton = document.createElement("button");
   renameButton.type = "submit";
   renameButton.className = "button secondary";
   renameButton.textContent = "Save";
   renameButton.disabled = isDefaultGroup;
-  renameForm.append(renameInput, colorSelect, renameButton);
+  renameForm.append(renameInput, renameButton, colorPalette);
   renameForm.addEventListener("submit", (event) => {
     event.preventDefault();
     const name = renameInput.value.trim();
@@ -136,8 +150,9 @@ function makeGroupCard(group, index, state) {
     }
     void refreshAfter(() => command("group:rename", { groupId: group.id, name }), `Renamed group to ${name}.`);
   });
-  colorSelect.addEventListener("change", () => {
-    void refreshAfter(() => command("group:recolor", { groupId: group.id, color: colorSelect.value }), `Updated ${group.name}'s color.`);
+  colorPalette.addEventListener("change", (event) => {
+    if (!(event.target instanceof HTMLInputElement) || !event.target.checked) return;
+    void refreshAfter(() => command("group:recolor", { groupId: group.id, color: event.target.value }), `Updated ${group.name}'s color.`);
   });
 
   const actions = document.createElement("div");
