@@ -16,6 +16,7 @@ const extensionFiles = [
   "manager.js",
   "placeholder.html",
   "placeholder.css",
+  "icons/manager-logo.png",
   "icons/icon16.png",
   "icons/icon32.png",
   "icons/icon48.png",

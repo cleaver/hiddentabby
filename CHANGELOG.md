@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.3 — 2026-10-16
+
+- Use a high-resolution logo in the workspace manager.
+- Publish tagged ZIP packages with checksums and GitHub build provenance.
+
 ## 0.1.2 — 2026-10-15
 
 - Use HiddenTabby artwork in the popup and workspace manager.

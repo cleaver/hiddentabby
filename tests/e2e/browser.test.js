@@ -838,6 +838,25 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
     const screenshotName = (process.env.BROWSER_BIN || "chromium").split("/").pop().replace(/[^a-z0-9_-]/gi, "-");
     await mkdir(artifactDirectory, { recursive: true });
     await managerAgainClient.send("Emulation.setDeviceMetricsOverride", {
+      width: 1280, height: 900, deviceScaleFactor: 2, mobile: false,
+    });
+    const retinaLogo = await managerAgainClient.evaluate(`(() => {
+      const image = document.querySelector(".brand-mark img");
+      const rect = image.getBoundingClientRect();
+      return { complete: image.complete, naturalWidth: image.naturalWidth,
+        cssWidth: rect.width, devicePixelRatio: window.devicePixelRatio };
+    })()`);
+    assert.equal(retinaLogo.complete, true, "The high-resolution manager logo should load.");
+    assert.equal(retinaLogo.devicePixelRatio, 2);
+    assert.ok(retinaLogo.naturalWidth >= retinaLogo.cssWidth * retinaLogo.devicePixelRatio,
+      "The manager logo should provide at least one source pixel per rendered retina pixel: "
+      + JSON.stringify(retinaLogo));
+    const retinaScreenshot = await managerAgainClient.send("Page.captureScreenshot", {
+      format: "png", captureBeyondViewport: false,
+    });
+    await writeFile(join(artifactDirectory, screenshotName + "-manager-retina.png"),
+      Buffer.from(retinaScreenshot.data, "base64"));
+    await managerAgainClient.send("Emulation.setDeviceMetricsOverride", {
       width: 1280, height: 900, deviceScaleFactor: 1, mobile: false,
     });
     const wideLayout = await managerAgainClient.evaluate(

@@ -38,8 +38,22 @@ npm run test:e2e:brave
 
 The package command requires the system zip utility and writes `dist/HiddenTabby.zip` with only runtime extension files. The packaged E2E commands require `unzip` and the installed Linux browsers at `/usr/bin/chromium` and `/usr/bin/brave`. They load the ZIP contents in headless browser profiles, exercise real tab/window/group/session/storage APIs, cover first-run adoption over existing native groups, enable incognito access and verify private tabs stay excluded, open and use the action popup and side-panel manager, test the Brave settings link, verify service-worker idle suspension/wake, and confirm state across a browser restart. Chromium closes its final normal window and restores its dormant tabs; Brave keeps the last normal window open in this headless setup. The runs save wide and narrow manager screenshots under `test-results/` and discard their profiles.
 
-Toolbar and extension-list icons are generated in `icons/` from the source illustration `hidden-tabby.png` and included in the package.
+Toolbar and extension-list icons are generated in `icons/` from the source illustration `hidden-tabby.png`; the workspace manager uses a high-resolution variant. Runtime icons are included in the package.
 
-GitHub Actions runs the unit, integration, and Chromium E2E suites on pushes and pull requests. A successful run attaches `HiddenTabby.zip` as a downloadable artifact; get it from the run's **Artifacts** section within 30 days.
+GitHub Actions runs the unit, integration, and Chromium E2E suites on pushes and pull requests. A successful run attaches `HiddenTabby.zip` as a downloadable artifact; get it from the run's **Artifacts** section within 30 days. Pushing a version tag such as `v0.1.3` runs `.github/workflows/release.yml`, which checks the tag against `manifest.json`, rebuilds and tests the ZIP, creates a SHA-256 checksum and GitHub artifact attestation, then attaches the ZIP and checksum to a GitHub release.
+
+### Verify a release package
+
+Download the ZIP and checksum from a GitHub release, then use the [GitHub CLI](https://cli.github.com/) to verify the checksum and that the exact ZIP was attested by this repository's release workflow:
+
+```sh
+gh release download v0.1.3 -R cleaver/hiddentabby
+sha256sum -c HiddenTabby.zip.sha256
+gh attestation verify HiddenTabby.zip \
+  -R cleaver/hiddentabby \
+  --signer-workflow cleaver/hiddentabby/.github/workflows/release.yml
+```
+
+The attestation ties the package digest to the tagged source revision and GitHub Actions workflow. It establishes package origin and integrity; it does not prove the source code is free of malicious behavior or that the maintainer account and build service cannot be compromised. Review the tagged source and workflow as well.
 
 Run `npm run test:e2e` for packaged Chromium checks and `npm run test:e2e:brave` for Brave. Reload the unpacked extension after editing files. The suite tests the extension in disposable headless browser profiles; separate headed checks have clicked the toolbar icon, dismissed the popup with Escape, selected a native tab-strip move destination, and opened the side-panel manager in Chromium and Brave. The Brave E2E also clicks the Container settings control and verifies that Brave opens its settings page. Initial support targets Linux, with Chromium as the Chrome proxy and a separate Brave run.

@@ -52,11 +52,11 @@ a {
 
 .brand-mark {
   display: grid;
-  width: 46px;
-  height: 46px;
+  width: 60px;
+  height: 60px;
   place-items: center;
   border: 1px solid #48627c;
-  border-radius: 14px;
+  border-radius: 17px;
   background: #1d3043;
 }
 

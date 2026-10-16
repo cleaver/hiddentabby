@@ -6,9 +6,21 @@ const createForm = document.querySelector("#create-form");
 const nameInput = document.querySelector("#group-name");
 const braveContainerCard = document.querySelector("#brave-container-card");
 const braveContainersHelp = document.querySelector("#brave-containers-help");
-const openBraveContainerSettings = document.querySelector("#open-brave-container-settings");
+const openBraveContainerSettings = document.querySelector(
+  "#open-brave-container-settings",
+);
 
-const colors = ["grey", "blue", "red", "yellow", "green", "pink", "purple", "cyan", "orange"];
+const colors = [
+  "grey",
+  "blue",
+  "red",
+  "yellow",
+  "green",
+  "pink",
+  "purple",
+  "cyan",
+  "orange",
+];
 const colorValues = {
   grey: "#929aa5",
   blue: "#61a9ff",
@@ -23,7 +35,10 @@ const colorValues = {
 
 async function command(type, values = {}) {
   const response = await chrome.runtime.sendMessage({ type, ...values });
-  if (!response?.ok) throw new Error(response?.error ?? "HiddenTabby could not complete that action.");
+  if (!response?.ok)
+    throw new Error(
+      response?.error ?? "HiddenTabby could not complete that action.",
+    );
   return response.value;
 }
 
@@ -68,7 +83,10 @@ function makeColorPalette(selectedColor, label, groupId) {
     radio.type = "radio";
     radio.name = `group-color-${groupId}`;
     radio.value = color;
-    radio.setAttribute("aria-label", `${color[0].toUpperCase()}${color.slice(1)}`);
+    radio.setAttribute(
+      "aria-label",
+      `${color[0].toUpperCase()}${color.slice(1)}`,
+    );
     radio.checked = color === selectedColor;
     const swatch = document.createElement("span");
     swatch.className = "color-swatch";
@@ -104,7 +122,10 @@ function makeGroupCard(group, index, state) {
   titleRow.className = "group-title-row";
   const dot = document.createElement("span");
   dot.className = "color-dot";
-  dot.style.setProperty("--group-color", colorValues[group.color] ?? colorValues.grey);
+  dot.style.setProperty(
+    "--group-color",
+    colorValues[group.color] ?? colorValues.grey,
+  );
   dot.setAttribute("aria-hidden", "true");
   const title = document.createElement("h3");
   title.className = "group-title";
@@ -118,7 +139,9 @@ function makeGroupCard(group, index, state) {
   }
   const count = document.createElement("span");
   count.className = "group-count";
-  count.textContent = savedCount ? `${openCount} open · ${savedCount} saved` : `${openCount} tab${openCount === 1 ? "" : "s"}`;
+  count.textContent = savedCount
+    ? `${openCount} open · ${savedCount} saved`
+    : `${openCount} tab${openCount === 1 ? "" : "s"}`;
   titleRow.append(count);
 
   const renameForm = document.createElement("form");
@@ -148,37 +171,72 @@ function makeGroupCard(group, index, state) {
       renameInput.focus();
       return;
     }
-    void refreshAfter(() => command("group:rename", { groupId: group.id, name }), `Renamed group to ${name}.`);
+    void refreshAfter(
+      () => command("group:rename", { groupId: group.id, name }),
+      `Renamed group to ${name}.`,
+    );
   });
   colorPalette.addEventListener("change", (event) => {
-    if (!(event.target instanceof HTMLInputElement) || !event.target.checked) return;
-    void refreshAfter(() => command("group:recolor", { groupId: group.id, color: event.target.value }), `Updated ${group.name}'s color.`);
+    if (!(event.target instanceof HTMLInputElement) || !event.target.checked)
+      return;
+    void refreshAfter(
+      () =>
+        command("group:recolor", {
+          groupId: group.id,
+          color: event.target.value,
+        }),
+      `Updated ${group.name}'s color.`,
+    );
   });
 
   const actions = document.createElement("div");
   actions.className = "group-actions";
   const closedCount = groupTabs.filter((tab) => tab.status === "closed").length;
   const isActive = state.activeGroupId === group.id;
-  actions.append(makeButton(
-    isActive ? (closedCount ? "Restore saved tabs" : "Current group") : "Switch to group",
+  actions.append(
+    makeButton(
+      isActive
+        ? closedCount
+          ? "Restore saved tabs"
+          : "Current group"
+        : "Switch to group",
+      "secondary",
+      () =>
+        void refreshAfter(
+          () => command("group:switch", { groupId: group.id }),
+          `Showing ${group.name}.`,
+        ),
+      isActive && closedCount === 0,
+    ),
+  );
+  const moveUp = makeButton(
+    "Move up",
     "secondary",
-    () => void refreshAfter(() => command("group:switch", { groupId: group.id }), `Showing ${group.name}.`),
-    isActive && closedCount === 0,
-  ));
-  const moveUp = makeButton("Move up", "secondary", () => void reorderAt(index, -1, state), index === 0);
+    () => void reorderAt(index, -1, state),
+    index === 0,
+  );
   moveUp.setAttribute("aria-label", `Move ${group.name} up`);
-  const moveDown = makeButton("Move down", "secondary", () => void reorderAt(index, 1, state), index === state.groups.length - 1);
+  const moveDown = makeButton(
+    "Move down",
+    "secondary",
+    () => void reorderAt(index, 1, state),
+    index === state.groups.length - 1,
+  );
   moveDown.setAttribute("aria-label", `Move ${group.name} down`);
   actions.append(moveUp, moveDown);
   const deleteButton = makeButton("Delete", "danger", async () => {
-    const defaultNote = group.name.toLocaleLowerCase() === "default"
-      ? " A fresh empty Default group will replace it."
-      : state.activeGroupId === group.id
-        ? " Default will become active."
-        : "";
-    const warning = `Delete “${group.name}”? This closes ${openCount} open tab${openCount === 1 ? "" : "s"} and forgets ${groupTabs.length} saved/live tab${groupTabs.length === 1 ? "" : "s"} across all windows. Nothing is moved to another group, and browser history is not deleted.${defaultNote}`;
+    const defaultNote =
+      group.name.toLocaleLowerCase() === "default"
+        ? " A fresh empty Default group will replace it."
+        : state.activeGroupId === group.id
+          ? " Default will become active."
+          : "";
+    const warning = `Delete “${group.name}”? This closes ${openCount} open tab${openCount === 1 ? "" : "s"} and forgets ${groupTabs.length} saved/live tab${groupTabs.length === 1 ? "" : "s"} across all windows. Nothing is moved to another group and browser history is not deleted.${defaultNote}`;
     if (!window.confirm(warning)) return;
-    await refreshAfter(() => command("group:delete", { groupId: group.id }), `Deleted ${group.name}.`);
+    await refreshAfter(
+      () => command("group:delete", { groupId: group.id }),
+      `Deleted ${group.name}.`,
+    );
   });
   deleteButton.setAttribute("aria-label", `Delete ${group.name} group`);
   actions.append(deleteButton);
@@ -188,10 +246,18 @@ function makeGroupCard(group, index, state) {
 }
 
 async function reorderAt(index, offset, state) {
-  const ordered = [...state.groups].sort((a, b) => a.order - b.order).map((group) => group.id);
+  const ordered = [...state.groups]
+    .sort((a, b) => a.order - b.order)
+    .map((group) => group.id);
   const destination = index + offset;
-  [ordered[index], ordered[destination]] = [ordered[destination], ordered[index]];
-  await refreshAfter(() => command("group:reorder", { orderedIds: ordered }), "Group order updated.");
+  [ordered[index], ordered[destination]] = [
+    ordered[destination],
+    ordered[index],
+  ];
+  await refreshAfter(
+    () => command("group:reorder", { orderedIds: ordered }),
+    "Group order updated.",
+  );
 }
 
 function makeTabRow(tab, state) {
@@ -214,7 +280,10 @@ function makeTabRow(tab, state) {
   const controls = document.createElement("div");
   controls.className = "tab-move";
   const select = document.createElement("select");
-  select.setAttribute("aria-label", `Move ${tab.title || tab.url || "tab"} to group`);
+  select.setAttribute(
+    "aria-label",
+    `Move ${tab.title || tab.url || "tab"} to group`,
+  );
   for (const candidate of [...state.groups].sort((a, b) => a.order - b.order)) {
     const option = document.createElement("option");
     option.value = candidate.id;
@@ -222,11 +291,19 @@ function makeTabRow(tab, state) {
     option.selected = candidate.id === tab.groupId;
     select.append(option);
   }
-  const moveButton = makeButton("Move", "secondary", () => {
-    if (select.value === tab.groupId) return;
-    const identifier = tab.status === "open" ? tab.browserTabId : tab.id;
-    void refreshAfter(() => command("tab:move", { tabId: identifier, groupId: select.value }), "Tab moved.");
-  }, state.groups.length < 2);
+  const moveButton = makeButton(
+    "Move",
+    "secondary",
+    () => {
+      if (select.value === tab.groupId) return;
+      const identifier = tab.status === "open" ? tab.browserTabId : tab.id;
+      void refreshAfter(
+        () => command("tab:move", { tabId: identifier, groupId: select.value }),
+        "Tab moved.",
+      );
+    },
+    state.groups.length < 2,
+  );
   controls.append(select, moveButton);
   row.append(copy, controls);
   return row;
@@ -236,27 +313,45 @@ async function loadState() {
   try {
     const state = await command("state:get");
     const orderedGroups = [...state.groups].sort((a, b) => a.order - b.order);
-    groupsElement.replaceChildren(...orderedGroups.map((group, index) => makeGroupCard(group, index, state)));
+    groupsElement.replaceChildren(
+      ...orderedGroups.map((group, index) =>
+        makeGroupCard(group, index, state),
+      ),
+    );
     const orderedTabs = [...state.tabs].sort((a, b) => {
-      const groupA = state.groups.find((group) => group.id === a.groupId)?.order ?? 0;
-      const groupB = state.groups.find((group) => group.id === b.groupId)?.order ?? 0;
-      return groupA - groupB || a.browserWindowId - b.browserWindowId || a.index - b.index;
+      const groupA =
+        state.groups.find((group) => group.id === a.groupId)?.order ?? 0;
+      const groupB =
+        state.groups.find((group) => group.id === b.groupId)?.order ?? 0;
+      return (
+        groupA - groupB ||
+        a.browserWindowId - b.browserWindowId ||
+        a.index - b.index
+      );
     });
-    tabsElement.replaceChildren(...orderedTabs.map((tab) => makeTabRow(tab, state)));
+    tabsElement.replaceChildren(
+      ...orderedTabs.map((tab) => makeTabRow(tab, state)),
+    );
     if (!orderedTabs.length) {
       const empty = document.createElement("p");
       empty.className = "empty-state";
-      empty.textContent = "No saved tabs yet. New tabs join the current group automatically.";
+      empty.textContent =
+        "No saved tabs yet. New tabs join the current group automatically.";
       tabsElement.append(empty);
     }
-    const savedCount = orderedTabs.filter((tab) => tab.status === "closed").length;
+    const savedCount = orderedTabs.filter(
+      (tab) => tab.status === "closed",
+    ).length;
     const openCount = orderedTabs.length - savedCount;
     tabSummaryElement.textContent = `${openCount} open · ${savedCount} saved`;
-  setStatus("Tab titles and URLs stay in this browser profile; HiddenTabby does not upload them to an external service.");
+    setStatus(
+      "Tab titles and URLs stay in this browser profile; HiddenTabby does not upload them to an external service.",
+    );
   } catch (error) {
     const groupsEmpty = document.createElement("p");
     groupsEmpty.className = "empty-state";
-    groupsEmpty.textContent = "Groups could not be loaded. Reload the extension and try again.";
+    groupsEmpty.textContent =
+      "Groups could not be loaded. Reload the extension and try again.";
     groupsElement.replaceChildren(groupsEmpty);
     tabsElement.replaceChildren();
     setStatus(error.message, "error");
@@ -271,7 +366,10 @@ createForm.addEventListener("submit", async (event) => {
     nameInput.focus();
     return;
   }
-  await refreshAfter(() => command("group:create", { details: { name } }), `Created ${name}; the active group did not change.`);
+  await refreshAfter(
+    () => command("group:create", { details: { name } }),
+    `Created ${name}; the active group did not change.`,
+  );
   nameInput.value = "";
 });
 

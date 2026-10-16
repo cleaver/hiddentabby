@@ -34,7 +34,10 @@ test("extension pages use local scripts and safe DOM text APIs", async () => {
   for (const page of ["popup.html", "manager.html", "placeholder.html"]) {
     const html = await readFile(resolve(root, page), "utf8");
     if (page !== "placeholder.html") {
-      assert.match(html, /<img src="icons\/icon48\.png" alt="">/, `${page} should show the project logo`);
+      const logoMarkup = page === "manager.html"
+        ? /<img src="icons\/manager-logo\.png" alt="">/
+        : /<img src="icons\/icon48\.png" alt="">/;
+      assert.match(html, logoMarkup, `${page} should show the project logo`);
     }
     const scripts = [...html.matchAll(/<script\b[^>]*\bsrc="([^"]+)"[^>]*><\/script>/g)];
     assert.equal(scripts.length, page === "placeholder.html" ? 0 : 1, `${page} should load only its intended script`);
@@ -45,6 +48,10 @@ test("extension pages use local scripts and safe DOM text APIs", async () => {
       await assert.doesNotReject(readFile(resolve(root, stylesheet)), `missing stylesheet: ${stylesheet}`);
     }
   }
+
+  const managerLogo = await readFile(resolve(root, "icons/manager-logo.png"));
+  assert.equal(managerLogo.readUInt32BE(16), 256, "The manager logo should have enough pixels for high-DPI displays.");
+  assert.equal(managerLogo.readUInt32BE(20), 256, "The manager logo should remain square.");
 
   for (const script of ["popup.js", "manager.js"]) {
     const source = await readFile(resolve(root, script), "utf8");
