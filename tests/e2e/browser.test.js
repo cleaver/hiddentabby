@@ -10,6 +10,7 @@ import test from "node:test";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const archive = join(root, "dist", "HiddenTabby.zip");
 const browserPath = process.env.BROWSER_BIN || "/usr/bin/chromium";
+const browserStartupTimeout = 60_000;
 const wait = (milliseconds) => new Promise((resolveWait) => setTimeout(resolveWait, milliseconds));
 
 class DevToolsClient {
@@ -196,7 +197,7 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
         if (browserProcess.exitCode !== null) throw new Error("Browser exited before DevTools started.");
         return null;
       }
-    }, Boolean, "browser DevTools endpoint", 20000);
+    }, Boolean, "browser DevTools endpoint", browserStartupTimeout);
     assert.match(endpoint.version.Browser, /Chrom|Brave/i);
 
     const endpointUrl = "http://127.0.0.1:" + endpoint.port;
@@ -1119,7 +1120,7 @@ test("packaged group state survives a browser restart", { timeout: 90000 }, asyn
         if (child.exitCode !== null) throw new Error("Browser exited before DevTools started.");
         return null;
       }
-    }, Boolean, "restart-test DevTools endpoint", 20000);
+    }, Boolean, "restart-test DevTools endpoint", browserStartupTimeout);
     const client = await DevToolsClient.connect(endpoint.version.webSocketDebuggerUrl);
     const endpointUrl = "http://127.0.0.1:" + endpoint.port;
     const extensionId = await findExtensionId(profileDirectory, endpointUrl);
@@ -1543,7 +1544,7 @@ test("incognito-enabled HiddenTabby leaves private tabs outside its state", { ti
         if (child.exitCode !== null) throw new Error("Browser exited before DevTools started.");
         return null;
       }
-    }, Boolean, "incognito-test DevTools endpoint", 20000);
+    }, Boolean, "incognito-test DevTools endpoint", browserStartupTimeout);
     const client = await DevToolsClient.connect(endpoint.version.webSocketDebuggerUrl);
     const endpointUrl = "http://127.0.0.1:" + endpoint.port;
     const extensionId = await findExtensionId(profileDirectory, endpointUrl);
