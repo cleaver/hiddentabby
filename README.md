@@ -18,7 +18,7 @@ When only one tab from a HiddenTabby group is open in a window, HiddenTabby leav
 
 Inactive group tabs are closed so that windows can show only the selected group. HiddenTabby asks the browser Sessions API to restore closed tabs, then falls back to their saved URLs when no session is available. A restored page may lose unsaved form data, in-memory state, or running scripts. Empty windows keep one temporary New Tab placeholder; navigating it adds it to the active group.
 
-Group and tab metadata stays in `chrome.storage.local` in the current browser profile. HiddenTabby does not sync it or contact a service. The extension requests `tabs` and `tabGroups` to inspect/manage groups, `sessions` for tab restoration, `contextMenus` for the tab-strip move action, `storage` for local persistence, and `sidePanel` for the optional manager surface.
+Group and tab metadata, including page titles and URLs, stays in `chrome.storage.local` in the current browser profile so HiddenTabby can manage and restore workspaces. HiddenTabby does not sync or upload this data to an external service. See the [Privacy Policy](PRIVACY.md). The extension requests `tabs` and `tabGroups` to inspect/manage groups, `sessions` for tab restoration, `contextMenus` for the tab-strip move action, `storage` for local persistence, and `sidePanel` for the optional manager surface.
 
 Brave Containers are managed separately from HiddenTabby groups. The manager links to Brave's Container settings, but the extension does not identify, create, or assign Containers because a supported extension API is not available yet.
 
@@ -37,6 +37,8 @@ npm run test:e2e:brave
 ```
 
 The package command requires the system zip utility and writes `dist/HiddenTabby.zip` with only runtime extension files. The packaged E2E commands require `unzip` and the installed Linux browsers at `/usr/bin/chromium` and `/usr/bin/brave`. They load the ZIP contents in headless browser profiles, exercise real tab/window/group/session/storage APIs, cover first-run adoption over existing native groups, enable incognito access and verify private tabs stay excluded, open and use the action popup and side-panel manager, test the Brave settings link, verify service-worker idle suspension/wake, and confirm state across a browser restart. Chromium closes its final normal window and restores its dormant tabs; Brave keeps the last normal window open in this headless setup. The runs save wide and narrow manager screenshots under `test-results/` and discard their profiles.
+
+Toolbar and extension-list icons are generated in `icons/` from the source illustration `hidden-tabby.png` and included in the package.
 
 GitHub Actions runs the unit, integration, and Chromium E2E suites on pushes and pull requests. A successful run attaches `HiddenTabby.zip` as a downloadable artifact; get it from the run's **Artifacts** section within 30 days.
 

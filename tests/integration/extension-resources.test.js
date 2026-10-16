@@ -9,6 +9,8 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 test("Manifest V3 permissions and declared extension pages are present", async () => {
   const manifest = JSON.parse(await readFile(resolve(root, "manifest.json"), "utf8"));
   assert.equal(manifest.manifest_version, 3);
+  assert.match(manifest.version, /^\d+\.\d+\.\d+$/);
+  assert.ok(manifest.description.length <= 132, "Chrome Web Store description must be at most 132 characters.");
   assert.deepEqual(new Set(manifest.permissions), new Set([
     "tabs", "tabGroups", "sessions", "contextMenus", "storage", "sidePanel",
   ]));
@@ -16,6 +18,8 @@ test("Manifest V3 permissions and declared extension pages are present", async (
   const resources = [
     manifest.background.service_worker,
     manifest.action.default_popup,
+    ...Object.values(manifest.icons),
+    ...Object.values(manifest.action.default_icon),
     manifest.options_ui.page,
     manifest.side_panel.default_path,
     "placeholder.html",

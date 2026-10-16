@@ -1,8 +1,14 @@
 {
   "manifest_version": 3,
   "name": "HiddenTabby",
-  "version": "0.1.0",
-  "description": "Keep workspaces tidy by switching between saved tab groups.",
+  "version": "0.1.1",
+  "description": "Organize tabs into local workspaces across windows. Tab titles and URLs stay in this browser profile.",
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
   "permissions": ["tabs", "tabGroups", "sessions", "contextMenus", "storage", "sidePanel"],
   "background": {
     "service_worker": "src/service-worker.js",
@@ -10,7 +16,12 @@
   },
   "action": {
     "default_title": "Open HiddenTabby",
-    "default_popup": "popup.html"
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png"
+    }
   },
   "options_ui": {
     "page": "manager.html",

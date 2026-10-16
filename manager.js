@@ -237,7 +237,7 @@ async function loadState() {
     const savedCount = orderedTabs.filter((tab) => tab.status === "closed").length;
     const openCount = orderedTabs.length - savedCount;
     tabSummaryElement.textContent = `${openCount} open · ${savedCount} saved`;
-    setStatus("Changes are stored locally in this browser profile.");
+  setStatus("Tab titles and URLs stay in this browser profile; HiddenTabby does not upload them to an external service.");
   } catch (error) {
     const groupsEmpty = document.createElement("p");
     groupsEmpty.className = "empty-state";
