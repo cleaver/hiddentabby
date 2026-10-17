@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Dismiss the tab move panel on outside click and add a Cancel action.
 - Use up to four responsive masonry-style columns in the workspace manager.
 - Organize saved and open tabs inside expandable workspace groups in the manager.
 - Show each tab's move controls on demand with an accessible icon button.

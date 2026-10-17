@@ -67,6 +67,25 @@ function makeButton(label, className, action, disabled = false) {
   return button;
 }
 
+function closeMovePanel(controlPanel, restoreFocus = false) {
+  const controls = controlPanel.parentElement;
+  const moveToggle = controls?.querySelector(".tab-move-toggle");
+  controlPanel.hidden = true;
+  controls?.closest(".tab-row")?.classList.remove("tab-row-move-open");
+  moveToggle?.setAttribute("aria-expanded", "false");
+  if (restoreFocus) moveToggle?.focus();
+}
+
+document.addEventListener("click", (event) => {
+  if (!(event.target instanceof Node)) return;
+  for (const controlPanel of document.querySelectorAll(
+    ".tab-move-panel:not([hidden])",
+  )) {
+    if (controlPanel.parentElement?.contains(event.target)) continue;
+    closeMovePanel(controlPanel);
+  }
+});
+
 function makeColorPalette(selectedColor, label, groupId) {
   const palette = document.createElement("fieldset");
   palette.className = "color-palette";
@@ -337,17 +356,25 @@ function makeTabRow(tab, state) {
     },
     state.groups.length < 2,
   );
-  controlPanel.append(select, moveButton);
+  const cancelButton = makeButton(
+    "Cancel",
+    "secondary",
+    () => closeMovePanel(controlPanel, true),
+  );
+  controlPanel.append(select, moveButton, cancelButton);
 
   const moveToggle = makeButton(
     "",
     "secondary tab-move-toggle",
     () => {
-      controlPanel.hidden = !controlPanel.hidden;
-      const expanded = !controlPanel.hidden;
-      row.classList.toggle("tab-row-move-open", expanded);
-      moveToggle.setAttribute("aria-expanded", String(expanded));
-      if (!controlPanel.hidden) select.focus();
+      if (controlPanel.hidden) {
+        controlPanel.hidden = false;
+        row.classList.add("tab-row-move-open");
+        moveToggle.setAttribute("aria-expanded", "true");
+        select.focus();
+      } else {
+        closeMovePanel(controlPanel);
+      }
     },
     state.groups.length < 2,
   );

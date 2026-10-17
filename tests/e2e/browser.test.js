@@ -885,19 +885,36 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
     }, "The compact move icon should have an accessible name and tooltip, with controls initially hidden.");
     const exposedMoveControls = await managerClient.evaluate("(() => { const row=[...document.querySelectorAll('.tab-row')].find((item)=>item.querySelector('.tab-url')?.textContent==="
       + JSON.stringify(qaTabUrl)
-      + "&&item.querySelector('.tab-meta')?.textContent.startsWith('Default · Open')); const toggle=row?.querySelector('.tab-move-toggle'); const panel=row?.querySelector('.tab-move-panel'); const rowHeightBefore=row?.getBoundingClientRect().height; toggle?.click(); const panelRect=panel?.getBoundingClientRect(); const toggleRect=toggle?.getBoundingClientRect(); return {expanded:toggle?.getAttribute('aria-expanded'),panelHidden:panel?.hidden,selectFocused:document.activeElement===panel?.querySelector('select'),hasMoveButton:Boolean(panel?.querySelector('button')),position:getComputedStyle(panel).position,rowHeightUnchanged:rowHeightBefore===row?.getBoundingClientRect().height,panelBeforeIcon:panelRect?.right<=toggleRect?.left}; })()");
+      + "&&item.querySelector('.tab-meta')?.textContent.startsWith('Default · Open')); const toggle=row?.querySelector('.tab-move-toggle'); const panel=row?.querySelector('.tab-move-panel'); const rowHeightBefore=row?.getBoundingClientRect().height; toggle?.click(); const panelRect=panel?.getBoundingClientRect(); const toggleRect=toggle?.getBoundingClientRect(); return {expanded:toggle?.getAttribute('aria-expanded'),panelHidden:panel?.hidden,rowMarkedOpen:row?.classList.contains('tab-row-move-open'),selectFocused:document.activeElement===panel?.querySelector('select'),hasMoveButton:Boolean(panel?.querySelector('button')),hasCancelButton:[...(panel?.querySelectorAll('button')??[])].some((button)=>button.textContent.trim()==='Cancel'),position:getComputedStyle(panel).position,rowHeightUnchanged:rowHeightBefore===row?.getBoundingClientRect().height,panelBeforeIcon:panelRect?.right<=toggleRect?.left}; })()");
     assert.deepEqual(exposedMoveControls, {
       expanded: "true",
       panelHidden: false,
+      rowMarkedOpen: true,
       selectFocused: true,
       hasMoveButton: true,
+      hasCancelButton: true,
       position: "absolute",
       rowHeightUnchanged: true,
       panelBeforeIcon: true,
     }, "Activating the move icon should reveal and focus the existing move controls.");
+    const insideComponentClick = await managerClient.evaluate("(() => { const row=[...document.querySelectorAll('.tab-row')].find((item)=>item.querySelector('.tab-url')?.textContent==="
+      + JSON.stringify(qaTabUrl)
+      + "&&item.querySelector('.tab-meta')?.textContent.startsWith('Default · Open')); const panel=row?.querySelector('.tab-move-panel'); panel?.querySelector('select')?.dispatchEvent(new MouseEvent('click',{bubbles:true})); return {expanded:row?.querySelector('.tab-move-toggle')?.getAttribute('aria-expanded'),panelHidden:panel?.hidden,rowMarkedOpen:row?.classList.contains('tab-row-move-open')}; })()");
+    assert.deepEqual(insideComponentClick, { expanded: "true", panelHidden: false, rowMarkedOpen: true },
+      "Clicking a control inside the move component should not dismiss it.");
+    const canceledMove = await managerClient.evaluate("(() => { const row=[...document.querySelectorAll('.tab-row')].find((item)=>item.querySelector('.tab-url')?.textContent==="
+      + JSON.stringify(qaTabUrl)
+      + "&&item.querySelector('.tab-meta')?.textContent.startsWith('Default · Open')); const toggle=row?.querySelector('.tab-move-toggle'); const panel=row?.querySelector('.tab-move-panel'); [...(panel?.querySelectorAll('button')??[])].find((button)=>button.textContent.trim()==='Cancel')?.click(); return {expanded:toggle?.getAttribute('aria-expanded'),panelHidden:panel?.hidden,rowMarkedOpen:row?.classList.contains('tab-row-move-open'),focusReturned:document.activeElement===toggle}; })()");
+    assert.deepEqual(canceledMove, { expanded: "false", panelHidden: true, rowMarkedOpen: false, focusReturned: true },
+      "Cancel should close the move component and return focus to its toggle.");
+    const outsideClickDismissal = await managerClient.evaluate("(() => { const row=[...document.querySelectorAll('.tab-row')].find((item)=>item.querySelector('.tab-url')?.textContent==="
+      + JSON.stringify(qaTabUrl)
+      + "&&item.querySelector('.tab-meta')?.textContent.startsWith('Default · Open')); const toggle=row?.querySelector('.tab-move-toggle'); const panel=row?.querySelector('.tab-move-panel'); toggle?.click(); const opened=!panel?.hidden; document.querySelector('#status')?.click(); return {opened,expanded:toggle?.getAttribute('aria-expanded'),panelHidden:panel?.hidden,rowMarkedOpen:row?.classList.contains('tab-row-move-open')}; })()");
+    assert.deepEqual(outsideClickDismissal, { opened: true, expanded: "false", panelHidden: true, rowMarkedOpen: false },
+      "Clicking outside the move component should dismiss it.");
     await managerClient.evaluate("(() => { const row=[...document.querySelectorAll('.tab-row')].find((item)=>item.querySelector('.tab-url')?.textContent==="
       + JSON.stringify(qaTabUrl)
-      + "&&item.querySelector('.tab-meta')?.textContent.startsWith('Default · Open')); if(!row) throw new Error('QA tab row not found'); const panel=row.querySelector('.tab-move-panel'); const select=panel.querySelector('select'); select.value="
+      + "&&item.querySelector('.tab-meta')?.textContent.startsWith('Default · Open')); if(!row) throw new Error('QA tab row not found'); const toggle=row.querySelector('.tab-move-toggle'); const panel=row.querySelector('.tab-move-panel'); if(panel.hidden) toggle.click(); const select=panel.querySelector('select'); select.value="
       + JSON.stringify(destinationGroup.id)
       + "; panel.querySelector('button').click(); return true; })()");
     const moveStatus = await waitFor(
