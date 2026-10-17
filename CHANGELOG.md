@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Organize saved and open tabs inside expandable workspace groups in the manager.
+
 ## 0.1.5 — 2026-10-16
 
 - Explain checksum and artifact attestation verification and their limits.

@@ -750,6 +750,57 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
       (count) => count > 0,
       "workspace manager group cards rendered",
     );
+    const managerWorkspaceLayout = await managerClient.evaluate(`(() => {
+      const cards = [...document.querySelectorAll(".group-card")];
+      const rows = [...document.querySelectorAll(".tab-row")];
+      return {
+        hasSeparateTabsPanel: Boolean(document.querySelector("#tabs")),
+        groupCount: cards.length,
+        groupsWithTabLists: cards.filter((card) => card.querySelector(".tab-list")).length,
+        tabRows: rows.length,
+        tabRowsInsideGroups: rows.filter((row) => row.closest(".group-card")).length,
+        rowsMatchTheirGroup: rows.every((row) => {
+          const groupCard = row.closest(".group-card");
+          const groupName = groupCard?.querySelector(".group-title")?.textContent;
+          const meta = row.querySelector(".tab-meta")?.textContent;
+          return Boolean(groupName && meta?.startsWith(groupName + " · "));
+        }),
+      };
+    })()`);
+    assert.equal(managerWorkspaceLayout.hasSeparateTabsPanel, false,
+      "Saved tabs should no longer have a separate manager panel.");
+    assert.equal(managerWorkspaceLayout.groupsWithTabLists, managerWorkspaceLayout.groupCount,
+      "Every group should contain its own tab list.");
+    assert.equal(managerWorkspaceLayout.tabRowsInsideGroups, managerWorkspaceLayout.tabRows,
+      "Every saved tab should be rendered inside its owning group.");
+    assert.ok(managerWorkspaceLayout.tabRows > 0, "The manager test should exercise tabs within groups.");
+    assert.equal(managerWorkspaceLayout.rowsMatchTheirGroup, true,
+      "Each saved tab should appear under the group named in its membership details.");
+    const managerExpansion = await managerClient.evaluate(`(() => {
+      const details = document.querySelector(".group-card .group-disclosure");
+      const summary = details?.querySelector(".group-summary");
+      const tabList = details?.querySelector(".tab-list");
+      if (!details || !summary || !tabList) return null;
+      const initiallyExpanded = details.open;
+      summary.click();
+      const collapsed = !details.open;
+      summary.click();
+      return { initiallyExpanded, collapsed, expandedAgain: details.open };
+    })()`);
+    assert.deepEqual(managerExpansion, {
+      initiallyExpanded: true,
+      collapsed: true,
+      expandedAgain: true,
+    }, "Each group's native disclosure should collapse and restore its member tabs.");
+    const collapsedGroupB = await managerClient.evaluate(`(() => {
+      const card = [...document.querySelectorAll(".group-card")]
+        .find((item) => item.querySelector(".group-title")?.textContent === "Group B");
+      const details = card?.querySelector(".group-disclosure");
+      if (!details) return false;
+      details.querySelector(".group-summary").click();
+      return !details.open;
+    })()`);
+    assert.equal(collapsedGroupB, true, "A group can remain collapsed while another group is edited.");
     const managerPaletteLayout = await managerClient.evaluate(`(() => {
       const card = [...document.querySelectorAll(".group-card")]
         .find((item) => item.querySelector(".group-title")?.textContent === "Default");
@@ -779,6 +830,13 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
       "workspace manager color selection",
     );
     assert.equal(recoloredInManager.color, "green");
+    const groupBCollapsedAfterRefresh = await managerClient.evaluate(`(() => {
+      const card = [...document.querySelectorAll(".group-card")]
+        .find((item) => item.querySelector(".group-title")?.textContent === "Group B");
+      return card?.querySelector(".group-disclosure")?.open ?? null;
+    })()`);
+    assert.equal(groupBCollapsedAfterRefresh, false,
+      "Updating another group should preserve this group's collapsed state.");
 
     const qaTabUrl = "data:text/html,<title>Chromium QA Tab</title>";
     const moveTarget = await waitFor(

@@ -198,23 +198,59 @@ a:focus-visible {
 
 .group-grid {
   display: grid;
+  align-items: start;
   grid-template-columns: repeat(auto-fit, minmax(min(340px, 100%), 1fr));
   gap: 11px;
 }
 
 .group-card {
   min-width: 0;
-  padding: 15px;
   border: 1px solid #34495f;
   border-radius: 12px;
   background: #172538;
+}
+
+.group-disclosure {
+  min-width: 0;
+  padding: 15px;
+}
+
+.group-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  list-style: none;
+  cursor: pointer;
+}
+
+.group-summary::-webkit-details-marker {
+  display: none;
+}
+
+.group-summary::before {
+  content: "▸";
+  flex: 0 0 12px;
+  color: #9eb0c4;
+  font-size: 15px;
+  transition: transform 120ms ease;
+}
+
+.group-disclosure[open] > .group-summary::before {
+  transform: rotate(90deg);
 }
 
 .group-title-row {
   display: flex;
   align-items: center;
   gap: 9px;
-  margin-bottom: 12px;
+  min-width: 0;
+  flex: 1;
+}
+
+.group-content {
+  margin-top: 14px;
+  padding-top: 13px;
+  border-top: 1px solid #304357;
 }
 
 .color-dot {
@@ -330,6 +366,7 @@ a:focus-visible {
 .tab-list {
   display: grid;
   gap: 8px;
+  margin-top: 12px;
 }
 
 .tab-row {

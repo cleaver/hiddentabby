@@ -1,7 +1,5 @@
 const groupsElement = document.querySelector("#groups");
-const tabsElement = document.querySelector("#tabs");
 const statusElement = document.querySelector("#status");
-const tabSummaryElement = document.querySelector("#tab-summary");
 const createForm = document.querySelector("#create-form");
 const nameInput = document.querySelector("#group-name");
 const braveContainerCard = document.querySelector("#brave-container-card");
@@ -9,6 +7,7 @@ const braveContainersHelp = document.querySelector("#brave-containers-help");
 const openBraveContainerSettings = document.querySelector(
   "#open-brave-container-settings",
 );
+const collapsedGroupIds = new Set();
 
 const colors = [
   "grey",
@@ -117,6 +116,14 @@ function makeGroupCard(group, index, state) {
   const savedCount = groupTabs.length - openCount;
   const card = document.createElement("article");
   card.className = "group-card";
+  const disclosure = document.createElement("details");
+  disclosure.className = "group-disclosure";
+  disclosure.dataset.groupId = group.id;
+  disclosure.open = !collapsedGroupIds.has(group.id);
+  disclosure.addEventListener("toggle", () => {
+    if (disclosure.open) collapsedGroupIds.delete(group.id);
+    else collapsedGroupIds.add(group.id);
+  });
 
   const titleRow = document.createElement("div");
   titleRow.className = "group-title-row";
@@ -143,6 +150,10 @@ function makeGroupCard(group, index, state) {
     ? `${openCount} open · ${savedCount} saved`
     : `${openCount} tab${openCount === 1 ? "" : "s"}`;
   titleRow.append(count);
+
+  const summary = document.createElement("summary");
+  summary.className = "group-summary";
+  summary.append(titleRow);
 
   const renameForm = document.createElement("form");
   renameForm.className = "group-controls";
@@ -241,7 +252,25 @@ function makeGroupCard(group, index, state) {
   deleteButton.setAttribute("aria-label", `Delete ${group.name} group`);
   actions.append(deleteButton);
 
-  card.append(titleRow, renameForm, actions);
+  const tabList = document.createElement("div");
+  tabList.className = "tab-list";
+  const orderedTabs = groupTabs.sort((a, b) =>
+    a.browserWindowId - b.browserWindowId || a.index - b.index,
+  );
+  if (orderedTabs.length) {
+    tabList.append(...orderedTabs.map((tab) => makeTabRow(tab, state)));
+  } else {
+    const empty = document.createElement("p");
+    empty.className = "empty-state";
+    empty.textContent = "No tabs in this group yet.";
+    tabList.append(empty);
+  }
+
+  const content = document.createElement("div");
+  content.className = "group-content";
+  content.append(renameForm, actions, tabList);
+  disclosure.append(summary, content);
+  card.append(disclosure);
   return card;
 }
 
@@ -318,32 +347,6 @@ async function loadState() {
         makeGroupCard(group, index, state),
       ),
     );
-    const orderedTabs = [...state.tabs].sort((a, b) => {
-      const groupA =
-        state.groups.find((group) => group.id === a.groupId)?.order ?? 0;
-      const groupB =
-        state.groups.find((group) => group.id === b.groupId)?.order ?? 0;
-      return (
-        groupA - groupB ||
-        a.browserWindowId - b.browserWindowId ||
-        a.index - b.index
-      );
-    });
-    tabsElement.replaceChildren(
-      ...orderedTabs.map((tab) => makeTabRow(tab, state)),
-    );
-    if (!orderedTabs.length) {
-      const empty = document.createElement("p");
-      empty.className = "empty-state";
-      empty.textContent =
-        "No saved tabs yet. New tabs join the current group automatically.";
-      tabsElement.append(empty);
-    }
-    const savedCount = orderedTabs.filter(
-      (tab) => tab.status === "closed",
-    ).length;
-    const openCount = orderedTabs.length - savedCount;
-    tabSummaryElement.textContent = `${openCount} open · ${savedCount} saved`;
     setStatus(
       "Tab titles and URLs stay in this browser profile; HiddenTabby does not upload them to an external service.",
     );
@@ -353,7 +356,6 @@ async function loadState() {
     groupsEmpty.textContent =
       "Groups could not be loaded. Reload the extension and try again.";
     groupsElement.replaceChildren(groupsEmpty);
-    tabsElement.replaceChildren();
     setStatus(error.message, "error");
   }
 }
