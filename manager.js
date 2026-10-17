@@ -307,7 +307,11 @@ function makeTabRow(tab, state) {
   copy.append(title, url, meta);
 
   const controls = document.createElement("div");
-  controls.className = "tab-move";
+  controls.className = "tab-actions";
+  const controlPanel = document.createElement("div");
+  controlPanel.className = "tab-move-panel";
+  controlPanel.id = `tab-move-controls-${tab.id}`;
+  controlPanel.hidden = true;
   const select = document.createElement("select");
   select.setAttribute(
     "aria-label",
@@ -333,7 +337,49 @@ function makeTabRow(tab, state) {
     },
     state.groups.length < 2,
   );
-  controls.append(select, moveButton);
+  controlPanel.append(select, moveButton);
+
+  const moveToggle = makeButton(
+    "",
+    "secondary tab-move-toggle",
+    () => {
+      controlPanel.hidden = !controlPanel.hidden;
+      const expanded = !controlPanel.hidden;
+      row.classList.toggle("tab-row-move-open", expanded);
+      moveToggle.setAttribute("aria-expanded", String(expanded));
+      if (!controlPanel.hidden) select.focus();
+    },
+    state.groups.length < 2,
+  );
+  moveToggle.setAttribute(
+    "aria-label",
+    `Move ${tab.title || tab.url || "tab"} to another group`,
+  );
+  moveToggle.setAttribute("aria-controls", controlPanel.id);
+  moveToggle.setAttribute("aria-expanded", "false");
+  moveToggle.setAttribute("title", "Move to another group");
+  moveToggle.dataset.tooltip = "Move to another group";
+  const moveIcon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  moveIcon.setAttribute("class", "tab-move-icon");
+  moveIcon.setAttribute("viewBox", "0 0 24 24");
+  moveIcon.setAttribute("aria-hidden", "true");
+  moveIcon.setAttribute("focusable", "false");
+  const folderPath = document.createElementNS(
+    "http://www.w3.org/2000/svg",
+    "path",
+  );
+  folderPath.setAttribute(
+    "d",
+    "M4 6.5A1.5 1.5 0 0 1 5.5 5h4l2 2h7A1.5 1.5 0 0 1 20 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 17.5z",
+  );
+  const arrowPath = document.createElementNS(
+    "http://www.w3.org/2000/svg",
+    "path",
+  );
+  arrowPath.setAttribute("d", "M8 12h8m-3-3 3 3-3 3");
+  moveIcon.append(folderPath, arrowPath);
+  moveToggle.append(moveIcon);
+  controls.append(moveToggle, controlPanel);
   row.append(copy, controls);
   return row;
 }

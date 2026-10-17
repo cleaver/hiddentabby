@@ -846,15 +846,34 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
       + JSON.stringify(defaultGroup.id)
       + "&&tab.status==='open'); const row=[...document.querySelectorAll('.tab-row')].find((item)=>item.querySelector('.tab-url')?.textContent==="
         + JSON.stringify(qaTabUrl)
-        + "&&item.querySelector('.tab-meta')?.textContent.startsWith('Default · Open')); return record&&row?{recordId:record.id,browserTabId:record.browserTabId,rowMeta:row.querySelector('.tab-meta').textContent}:null; })()"),
+        + "&&item.querySelector('.tab-meta')?.textContent.startsWith('Default · Open')); const toggle=row?.querySelector('.tab-move-toggle'); const panel=row?.querySelector('.tab-move-panel'); return record&&row?{recordId:record.id,browserTabId:record.browserTabId,rowMeta:row.querySelector('.tab-meta').textContent,moveControl:{label:toggle?.getAttribute('aria-label')??null,title:toggle?.getAttribute('title')??null,tooltip:toggle?.getAttribute('data-tooltip')??null,expanded:toggle?.getAttribute('aria-expanded')??null,panelHidden:panel?.hidden??null}}:null; })()"),
       Boolean,
       "manager renders the Default QA tab row",
     );
+    assert.deepEqual(moveTarget.moveControl, {
+      label: "Move Chromium QA Tab to another group",
+      title: "Move to another group",
+      tooltip: "Move to another group",
+      expanded: "false",
+      panelHidden: true,
+    }, "The compact move icon should have an accessible name and tooltip, with controls initially hidden.");
+    const exposedMoveControls = await managerClient.evaluate("(() => { const row=[...document.querySelectorAll('.tab-row')].find((item)=>item.querySelector('.tab-url')?.textContent==="
+      + JSON.stringify(qaTabUrl)
+      + "&&item.querySelector('.tab-meta')?.textContent.startsWith('Default · Open')); const toggle=row?.querySelector('.tab-move-toggle'); const panel=row?.querySelector('.tab-move-panel'); const rowHeightBefore=row?.getBoundingClientRect().height; toggle?.click(); const panelRect=panel?.getBoundingClientRect(); const toggleRect=toggle?.getBoundingClientRect(); return {expanded:toggle?.getAttribute('aria-expanded'),panelHidden:panel?.hidden,selectFocused:document.activeElement===panel?.querySelector('select'),hasMoveButton:Boolean(panel?.querySelector('button')),position:getComputedStyle(panel).position,rowHeightUnchanged:rowHeightBefore===row?.getBoundingClientRect().height,panelBeforeIcon:panelRect?.right<=toggleRect?.left}; })()");
+    assert.deepEqual(exposedMoveControls, {
+      expanded: "true",
+      panelHidden: false,
+      selectFocused: true,
+      hasMoveButton: true,
+      position: "absolute",
+      rowHeightUnchanged: true,
+      panelBeforeIcon: true,
+    }, "Activating the move icon should reveal and focus the existing move controls.");
     await managerClient.evaluate("(() => { const row=[...document.querySelectorAll('.tab-row')].find((item)=>item.querySelector('.tab-url')?.textContent==="
       + JSON.stringify(qaTabUrl)
-      + "&&item.querySelector('.tab-meta')?.textContent.startsWith('Default · Open')); if(!row) throw new Error('QA tab row not found'); const select=row.querySelector('select'); select.value="
+      + "&&item.querySelector('.tab-meta')?.textContent.startsWith('Default · Open')); if(!row) throw new Error('QA tab row not found'); const panel=row.querySelector('.tab-move-panel'); const select=panel.querySelector('select'); select.value="
       + JSON.stringify(destinationGroup.id)
-      + "; row.querySelector('button').click(); return true; })()");
+      + "; panel.querySelector('button').click(); return true; })()");
     const moveStatus = await waitFor(
       () => managerClient.evaluate("({text:document.querySelector('#status').textContent,kind:document.querySelector('#status').dataset.kind})"),
       (status) => status.text === "Tab moved." || status.kind === "error",
@@ -962,6 +981,31 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
     );
     assert.ok(narrowLayout.content <= narrowLayout.viewport,
       "Narrow manager layout should not overflow horizontally: " + JSON.stringify(narrowLayout));
+    const narrowMoveOverlay = await managerAgainClient.evaluate(`(() => {
+      const toggle = [...document.querySelectorAll(".tab-move-toggle")]
+        .find((button) => !button.disabled);
+      const row = toggle?.closest(".tab-row");
+      const panel = row?.querySelector(".tab-move-panel");
+      if (!toggle || !row || !panel) return null;
+      const rowHeight = row.getBoundingClientRect().height;
+      toggle.click();
+      const rect = panel.getBoundingClientRect();
+      const viewportWidth = document.documentElement.clientWidth;
+      const result = {
+        expanded: toggle.getAttribute("aria-expanded"),
+        insideViewport: rect.left >= 0 && rect.right <= viewportWidth,
+        noPageOverflow: document.documentElement.scrollWidth <= viewportWidth,
+        rowHeightUnchanged: rowHeight === row.getBoundingClientRect().height,
+      };
+      toggle.click();
+      return result;
+    })()`);
+    assert.deepEqual(narrowMoveOverlay, {
+      expanded: "true",
+      insideViewport: true,
+      noPageOverflow: true,
+      rowHeightUnchanged: true,
+    }, "The narrow-screen move panel should float within the viewport without shifting its row.");
     const narrowScreenshot = await managerAgainClient.send("Page.captureScreenshot", {
       format: "png", captureBeyondViewport: false,
     });
