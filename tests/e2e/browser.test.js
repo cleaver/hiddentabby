@@ -776,6 +776,32 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
     assert.ok(managerWorkspaceLayout.tabRows > 0, "The manager test should exercise tabs within groups.");
     assert.equal(managerWorkspaceLayout.rowsMatchTheirGroup, true,
       "Each saved tab should appear under the group named in its membership details.");
+    await managerClient.send("Emulation.setDeviceMetricsOverride", {
+      width: 1600, height: 1000, deviceScaleFactor: 1, mobile: false,
+    });
+    const wideGroupLayout = await managerClient.evaluate(`(() => {
+      const grid = document.querySelector("#groups");
+      const cards = [...grid.querySelectorAll(":scope > .group-card")];
+      const clones = [];
+      while (cards.length + clones.length < 4) {
+        const clone = cards[clones.length % cards.length].cloneNode(true);
+        clone.dataset.layoutProbe = "true";
+        clones.push(clone);
+      }
+      grid.append(...clones);
+      const columns = new Set([...grid.querySelectorAll(":scope > .group-card")]
+        .map((card) => Math.round(card.getBoundingClientRect().left)));
+      clones.forEach((clone) => clone.remove());
+      return {columns: columns.size, pageWidth: document.documentElement.scrollWidth,
+        viewportWidth: document.documentElement.clientWidth};
+    })()`);
+    assert.equal(wideGroupLayout.columns, 4,
+      "A wide manager should use four masonry columns when four cards are present.");
+    assert.ok(wideGroupLayout.pageWidth <= wideGroupLayout.viewportWidth,
+      "Four-column manager layout should not overflow horizontally: " + JSON.stringify(wideGroupLayout));
+    await managerClient.send("Emulation.setDeviceMetricsOverride", {
+      width: 1280, height: 900, deviceScaleFactor: 1, mobile: false,
+    });
     const managerExpansion = await managerClient.evaluate(`(() => {
       const details = document.querySelector(".group-card .group-disclosure");
       const summary = details?.querySelector(".group-summary");

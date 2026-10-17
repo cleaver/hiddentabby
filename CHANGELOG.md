@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Use up to four responsive masonry-style columns in the workspace manager.
 - Organize saved and open tabs inside expandable workspace groups in the manager.
 - Show each tab's move controls on demand with an accessible icon button.
 - Float the move selector above tab rows without changing their layout.

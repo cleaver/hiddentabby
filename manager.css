@@ -38,7 +38,7 @@ a {
 }
 
 .page-shell {
-  width: min(1100px, 100% - 40px);
+  width: min(1460px, 100% - 40px);
   margin: 0 auto;
   padding: 28px 0 44px;
 }
@@ -197,14 +197,16 @@ a:focus-visible {
 }
 
 .group-grid {
-  display: grid;
-  align-items: start;
-  grid-template-columns: repeat(auto-fit, minmax(min(340px, 100%), 1fr));
-  gap: 11px;
+  column-count: 4;
+  column-width: 340px;
+  column-gap: 11px;
+  column-fill: balance;
 }
 
 .group-card {
   min-width: 0;
+  margin: 0 0 11px;
+  break-inside: avoid;
   border: 1px solid #34495f;
   border-radius: 12px;
   background: #172538;
