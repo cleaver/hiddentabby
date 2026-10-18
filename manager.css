@@ -197,7 +197,7 @@ a:focus-visible {
 }
 
 .group-grid {
-  column-count: 4;
+  column-count: 3;
   column-width: 340px;
   column-gap: 11px;
   column-fill: balance;
@@ -217,12 +217,48 @@ a:focus-visible {
   padding: 15px;
 }
 
+.group-disclosure[open] {
+  max-height: min(620px, calc(100vh - 100px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-color: #5b738d #172538;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+}
+
+.group-disclosure[open]::-webkit-scrollbar {
+  width: 10px;
+}
+
+.group-disclosure[open]::-webkit-scrollbar-track {
+  border-radius: 6px;
+  background: #172538;
+}
+
+.group-disclosure[open]::-webkit-scrollbar-thumb {
+  border: 2px solid #172538;
+  border-radius: 6px;
+  background: #5b738d;
+}
+
+.group-disclosure[open]::-webkit-scrollbar-thumb:hover {
+  background: #7891ab;
+}
+
 .group-summary {
   display: flex;
   align-items: center;
   gap: 8px;
   list-style: none;
   cursor: pointer;
+}
+
+.group-disclosure[open] > .group-summary {
+  position: sticky;
+  z-index: 2;
+  top: 0;
+  padding: 5px 0;
+  background: #172538;
 }
 
 .group-summary::-webkit-details-marker {

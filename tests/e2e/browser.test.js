@@ -776,29 +776,92 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
     assert.ok(managerWorkspaceLayout.tabRows > 0, "The manager test should exercise tabs within groups.");
     assert.equal(managerWorkspaceLayout.rowsMatchTheirGroup, true,
       "Each saved tab should appear under the group named in its membership details.");
-    await managerClient.send("Emulation.setDeviceMetricsOverride", {
-      width: 1600, height: 1000, deviceScaleFactor: 1, mobile: false,
-    });
-    const wideGroupLayout = await managerClient.evaluate(`(() => {
-      const grid = document.querySelector("#groups");
-      const cards = [...grid.querySelectorAll(":scope > .group-card")];
+    const groupHeightLayout = await managerClient.evaluate(`(() => {
+      const details = document.querySelector(".group-disclosure[open]");
+      const summary = details?.querySelector(".group-summary");
+      const tabList = details?.querySelector(".tab-list");
+      const sample = tabList?.querySelector(".tab-row");
+      if (!details || !summary || !tabList || !sample) return null;
       const clones = [];
-      while (cards.length + clones.length < 4) {
-        const clone = cards[clones.length % cards.length].cloneNode(true);
-        clone.dataset.layoutProbe = "true";
-        clones.push(clone);
+      while (tabList.children.length + clones.length < 14) {
+        clones.push(sample.cloneNode(true));
       }
-      grid.append(...clones);
-      const columns = new Set([...grid.querySelectorAll(":scope > .group-card")]
-        .map((card) => Math.round(card.getBoundingClientRect().left)));
+      tabList.append(...clones);
+      const card = details.closest(".group-card");
+      const scrollable = details.scrollHeight > details.clientHeight;
+      details.scrollTop = details.scrollHeight;
+      const summaryRect = summary.getBoundingClientRect();
+      const detailsRect = details.getBoundingClientRect();
+      const result = {
+        groupHeight: card.getBoundingClientRect().height,
+        scrollable,
+        scrollPositionChanged: details.scrollTop > 0,
+        summarySticky: getComputedStyle(summary).position === "sticky",
+        summaryVisibleAfterScroll: summaryRect.bottom > detailsRect.top
+          && summaryRect.top < detailsRect.bottom,
+      };
+      details.scrollTop = 0;
       clones.forEach((clone) => clone.remove());
-      return {columns: columns.size, pageWidth: document.documentElement.scrollWidth,
-        viewportWidth: document.documentElement.clientWidth};
+      return result;
     })()`);
-    assert.equal(wideGroupLayout.columns, 4,
-      "A wide manager should use four masonry columns when four cards are present.");
+    assert.ok(groupHeightLayout, "The manager should render an expanded group with tabs.");
+    assert.ok(groupHeightLayout.groupHeight <= 622,
+      "An expanded group should stay within its 620px height cap: " + JSON.stringify(groupHeightLayout));
+    assert.equal(groupHeightLayout.scrollable, true,
+      "Group contents beyond the height cap should be scrollable.");
+    assert.equal(groupHeightLayout.scrollPositionChanged, true,
+      "The expanded group should accept vertical scrolling.");
+    assert.equal(groupHeightLayout.summarySticky, true,
+      "The group heading should stay sticky while its contents scroll.");
+    assert.equal(groupHeightLayout.summaryVisibleAfterScroll, true,
+      "The group heading should remain visible at the end of the scrollable content.");
+    const measureManagerColumns = async (width) => {
+      await managerClient.send("Emulation.setDeviceMetricsOverride", {
+        width, height: 1000, deviceScaleFactor: 1, mobile: false,
+      });
+      return managerClient.evaluate(`(() => {
+      const grid = document.querySelector("#groups");
+      const existingCards = [...grid.querySelectorAll(":scope > .group-card")];
+      existingCards.forEach((card) => { card.hidden = true; });
+      const probes = Array.from({length: 6}, (_, index) => {
+        const card = document.createElement("article");
+        card.className = "group-card layout-probe";
+        card.dataset.layoutProbe = String(index);
+        card.style.height = "120px";
+        return card;
+      });
+      grid.append(...probes);
+      const columns = new Set(probes
+        .map((card) => Math.round(card.getBoundingClientRect().left)));
+      const result = {columns: columns.size, maxColumns: getComputedStyle(grid).columnCount,
+        pageWidth: document.documentElement.scrollWidth,
+        viewportWidth: document.documentElement.clientWidth};
+      probes.forEach((card) => card.remove());
+      existingCards.forEach((card) => { card.hidden = false; });
+      return result;
+    })()`);
+    };
+    const twoColumnLayout = await measureManagerColumns(800);
+    assert.equal(twoColumnLayout.columns, 2,
+      "The manager should reflow to two columns when three minimum-width columns do not fit.");
+    assert.equal(twoColumnLayout.maxColumns, "3",
+      "The workspace manager should have a global maximum of three columns.");
+    assert.ok(twoColumnLayout.pageWidth <= twoColumnLayout.viewportWidth,
+      "Two-column manager layout should not overflow horizontally: " + JSON.stringify(twoColumnLayout));
+    const threeColumnLayout = await measureManagerColumns(1280);
+    assert.equal(threeColumnLayout.columns, 3,
+      "The manager should use three columns when the available width permits it.");
+    assert.equal(threeColumnLayout.maxColumns, "3",
+      "The workspace manager should keep the same three-column maximum at desktop widths.");
+    assert.ok(threeColumnLayout.pageWidth <= threeColumnLayout.viewportWidth,
+      "Three-column manager layout should not overflow horizontally: " + JSON.stringify(threeColumnLayout));
+    const wideGroupLayout = await measureManagerColumns(1600);
+    assert.equal(wideGroupLayout.columns, 3,
+      "Wide managers should remain capped at three masonry columns.");
+    assert.equal(wideGroupLayout.maxColumns, "3",
+      "The workspace manager should never exceed three configured columns.");
     assert.ok(wideGroupLayout.pageWidth <= wideGroupLayout.viewportWidth,
-      "Four-column manager layout should not overflow horizontally: " + JSON.stringify(wideGroupLayout));
+      "Wide manager layout should not overflow horizontally: " + JSON.stringify(wideGroupLayout));
     await managerClient.send("Emulation.setDeviceMetricsOverride", {
       width: 1280, height: 900, deviceScaleFactor: 1, mobile: false,
     });
@@ -899,7 +962,7 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
     }, "Activating the move icon should reveal and focus the existing move controls.");
     const insideComponentClick = await managerClient.evaluate("(() => { const row=[...document.querySelectorAll('.tab-row')].find((item)=>item.querySelector('.tab-url')?.textContent==="
       + JSON.stringify(qaTabUrl)
-      + "&&item.querySelector('.tab-meta')?.textContent.startsWith('Default · Open')); const panel=row?.querySelector('.tab-move-panel'); panel?.querySelector('select')?.dispatchEvent(new MouseEvent('click',{bubbles:true})); return {expanded:row?.querySelector('.tab-move-toggle')?.getAttribute('aria-expanded'),panelHidden:panel?.hidden,rowMarkedOpen:row?.classList.contains('tab-row-move-open')}; })()");
+      + "&&item.querySelector('.tab-meta')?.textContent.startsWith('Default · Open')); const panel=row?.querySelector('.tab-move-panel'); panel?.click(); return {expanded:row?.querySelector('.tab-move-toggle')?.getAttribute('aria-expanded'),panelHidden:panel?.hidden,rowMarkedOpen:row?.classList.contains('tab-row-move-open')}; })()");
     assert.deepEqual(insideComponentClick, { expanded: "true", panelHidden: false, rowMarkedOpen: true },
       "Clicking a control inside the move component should not dismiss it.");
     const canceledMove = await managerClient.evaluate("(() => { const row=[...document.querySelectorAll('.tab-row')].find((item)=>item.querySelector('.tab-url')?.textContent==="
