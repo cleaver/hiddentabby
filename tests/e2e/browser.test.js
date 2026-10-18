@@ -811,6 +811,21 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
       const rows = [...document.querySelectorAll(".tab-row")];
       const windowLabels = rows.map((row) => row.querySelector(".tab-meta")?.textContent ?? "");
       const urls = rows.map((row) => row.querySelector(".tab-url"));
+      const actionLayouts = rows.map((row) => {
+        const move = row.querySelector(".tab-move-toggle");
+        const remove = row.querySelector(".tab-delete-button");
+        const moveRect = move?.getBoundingClientRect();
+        const removeRect = remove?.getBoundingClientRect();
+        return {
+          hasMove: Boolean(move),
+          hasDelete: Boolean(remove),
+          moveWidth: moveRect?.width ?? 0,
+          deleteWidth: removeRect?.width ?? 0,
+          topAligned: Boolean(moveRect && removeRect && Math.abs(moveRect.top - removeRect.top) < 1),
+          deleteHasAccessibleName: Boolean(remove?.getAttribute("aria-label")),
+          deleteHasTooltip: Boolean(remove?.getAttribute("title")),
+        };
+      });
       const firstRecord = state.tabs.find((tab) => tab.id === ${JSON.stringify(firstLastActiveRecord.id)});
       const secondRecord = state.tabs.find((tab) => tab.id === ${JSON.stringify(secondTabRecord.id)});
       const firstRow = rows.find((row) => row.dataset.tabId === firstRecord?.id);
@@ -821,6 +836,9 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
         groupsWithTabLists: cards.filter((card) => card.querySelector(".tab-list")).length,
         tabRows: rows.length,
         tabRowsInsideGroups: rows.filter((row) => row.closest(".group-card")).length,
+        actionsAreCompactAndTopAligned: actionLayouts.every((actions) => actions.hasMove
+          && actions.hasDelete && actions.moveWidth <= 30 && actions.deleteWidth <= 30
+          && actions.topAligned && actions.deleteHasAccessibleName && actions.deleteHasTooltip),
         rowsHaveFriendlyWindowLabels: windowLabels.every((label) => label.startsWith("Window #")
           && /^[0-9]+$/.test(label.slice(8))),
         windowLabelsContainNoGroupOrStatus: windowLabels.every((label) => !/ · |Open|Saved for restoration/.test(label)),
@@ -843,6 +861,8 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
     assert.equal(managerWorkspaceLayout.tabRowsInsideGroups, managerWorkspaceLayout.tabRows,
       "Every saved tab should be rendered inside its owning group.");
     assert.ok(managerWorkspaceLayout.tabRows > 0, "The manager test should exercise tabs within groups.");
+    assert.equal(managerWorkspaceLayout.actionsAreCompactAndTopAligned, true,
+      "Each tab should have compact, accessible move and delete buttons aligned at the row top.");
     assert.equal(managerWorkspaceLayout.rowsHaveFriendlyWindowLabels, true,
       "Tab rows should show simple window numbers instead of browser IDs.");
     assert.equal(managerWorkspaceLayout.windowLabelsContainNoGroupOrStatus, true,
@@ -1168,15 +1188,30 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
     assert.equal(movedRecord.browserTabId, null,
       "Moving to an inactive group should close the live tab. Target: " + JSON.stringify(moveTarget));
 
-    await clickGroup(popup.client, "Group B");
-    const restoredMovedState = await waitFor(
-      () => readState(popup.client),
-      (state) => state.activeGroupId === destinationGroup.id
-        && state.tabs.find((tab) => tab.id === movedRecord.id)?.status === "open",
-      "restore moved tab in destination group",
-      25000,
+    await managerClient.evaluate("(() => { const row=document.querySelector('[data-tab-id=\"" + moveTarget.recordId
+      + "\"]'); const button=row?.querySelector('.tab-delete-button'); if(!button) throw new Error('Saved tab delete button not found'); button.click(); return true; })()");
+    const savedDeleteStatus = await waitFor(
+      () => managerClient.evaluate("({text:document.querySelector('#status').textContent,kind:document.querySelector('#status').dataset.kind})"),
+      (status) => status.text === "Tab removed from group." || status.kind === "error",
+      "saved-tab deletion completion",
     );
-    assert.ok(restoredMovedState.tabs.find((tab) => tab.id === movedRecord.id)?.browserTabId);
+    assert.notEqual(savedDeleteStatus.kind, "error", savedDeleteStatus.text);
+    const afterSavedTabDelete = await waitFor(
+      () => readState(popup.client),
+      (state) => !state.tabs.some((tab) => tab.id === moveTarget.recordId) && state.operations.length === 0,
+      "delete a saved inactive-group tab",
+    );
+    assert.ok(afterSavedTabDelete.groups.some((group) => group.id === destinationGroup.id),
+      "Deleting a saved tab should leave its group in place.");
+
+    await clickGroup(popup.client, "Group B");
+    const groupAfterSavedTabDelete = await waitFor(
+      () => readState(popup.client),
+      (state) => state.activeGroupId === destinationGroup.id,
+      "switch to group after deleting its saved tab",
+    );
+    assert.equal(groupAfterSavedTabDelete.tabs.some((tab) => tab.id === moveTarget.recordId), false,
+      "Switching to a group should not restore a tab that was deleted from its saved snapshot.");
 
     await clickGroup(popup.client, "Default");
     await waitFor(() => readState(popup.client), (state) => state.activeGroupId === defaultGroup.id, "return to Default");
@@ -1291,6 +1326,43 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
     await managerAgainClient.send("Emulation.setDeviceMetricsOverride", {
       width: 1280, height: 900, deviceScaleFactor: 1, mobile: false,
     });
+
+    const activeDeleteBefore = await readState(managerAgainClient);
+    const activeDeleteRecord = activeDeleteBefore.tabs.find((tab) => tab.id === secondTabRecord.id);
+    assert.equal(activeDeleteRecord?.status, "open",
+      "The active-tab delete check needs a live tab in the manager.");
+    const activeDeleteControl = await managerAgainClient.evaluate(`(() => {
+      const row = document.querySelector('.tab-row[data-tab-id="${secondTabRecord.id}"]');
+      const button = row?.querySelector('.tab-delete-button');
+      const evidence = { label: button?.getAttribute('aria-label'),
+        title: button?.getAttribute('title'), width: button?.getBoundingClientRect().width };
+      if (!button) throw new Error('Active tab delete button not found');
+      button.click();
+      return evidence;
+    })()`);
+    assert.equal(activeDeleteControl.label, "Delete Second QA Tab from group");
+    assert.equal(activeDeleteControl.title, "Delete tab from group");
+    assert.ok(activeDeleteControl.width <= 30);
+    const activeDeleteStatus = await waitFor(
+      () => managerAgainClient.evaluate("({text:document.querySelector('#status').textContent,kind:document.querySelector('#status').dataset.kind})"),
+      (status) => status.text === "Tab removed from group." || status.kind === "error",
+      "active-tab deletion completion",
+    );
+    assert.notEqual(activeDeleteStatus.kind, "error", activeDeleteStatus.text);
+    const afterActiveTabDelete = await waitFor(
+      () => readState(popup.client),
+      (state) => !state.tabs.some((tab) => tab.id === secondTabRecord.id)
+        && state.operations.length === 0
+        && Number.isInteger(state.windows.find((window) => window.id === activeDeleteRecord.windowId)?.placeholderTabId),
+      "delete the active tab and preserve its empty window",
+    );
+    assert.ok(afterActiveTabDelete.groups.some((group) => group.id === defaultGroup.id),
+      "Deleting an active tab must leave the workspace intact.");
+    const liveIdsAfterActiveDelete = await popup.client.evaluate(
+      "chrome.tabs.query({}).then((tabs)=>tabs.map((tab)=>tab.id))",
+    );
+    assert.equal(liveIdsAfterActiveDelete.includes(activeDeleteRecord.browserTabId), false,
+      "Deleting from the active group must close the corresponding browser tab.");
 
     const defaultRecordsToDelete = (await readState(managerAgainClient)).tabs
       .filter((tab) => tab.groupId === defaultGroup.id && Number.isInteger(tab.browserTabId))

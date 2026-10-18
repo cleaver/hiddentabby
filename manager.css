@@ -509,20 +509,24 @@ a:focus-visible {
 .tab-actions {
   position: relative;
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
+  flex-direction: row;
+  align-items: flex-start;
+  align-self: start;
   justify-self: end;
-  gap: 6px;
+  gap: 4px;
 }
 
-.tab-move-toggle {
+.tab-action-icon-button {
   position: relative;
-  width: 34px;
-  min-height: 34px;
-  padding: 0;
+  display: grid;
+  width: 28px;
+  height: 28px;
+  min-height: 28px;
+  place-items: center;
+  padding: 4px;
 }
 
-.tab-move-toggle::after {
+.tab-action-icon-button::after {
   position: absolute;
   z-index: 2;
   top: 50%;
@@ -543,21 +547,32 @@ a:focus-visible {
   transition: opacity 120ms ease, visibility 120ms ease;
 }
 
-.tab-move-toggle:hover::after,
-.tab-move-toggle:focus-visible::after {
+.tab-action-icon-button:hover::after,
+.tab-action-icon-button:focus-visible::after {
   opacity: 1;
   visibility: visible;
 }
 
 .tab-move-icon {
   display: block;
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 16px;
   fill: none;
   stroke: currentColor;
   stroke-linecap: round;
   stroke-linejoin: round;
   stroke-width: 1.8;
+}
+
+.tab-delete-icon {
+  display: block;
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.7;
 }
 
 .tab-move-panel {

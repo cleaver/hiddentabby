@@ -964,6 +964,80 @@ test("moving the last active tab leaves an ungrouped placeholder in the window",
   assert.equal(moved.activeGroupId, state.activeGroupId);
 });
 
+test("deleting an active tab closes and forgets it and leaves an empty-window placeholder", async () => {
+  const { controller, calls, browser } = setup();
+  const initial = await controller.getState();
+  const record = initial.tabs.find((tab) => tab.browserTabId === 101);
+
+  const deleted = await controller.deleteTab(101);
+
+  assert.equal(deleted.tabs.some((tab) => tab.id === record.id), false);
+  assert.equal(deleted.groups.some((group) => group.id === initial.activeGroupId), true,
+    "Removing a tab must not remove its workspace.");
+  assert.equal(deleted.activeGroupId, initial.activeGroupId);
+  assert.deepEqual(calls.filter(([name]) => name === "remove").flatMap(([, ids]) => ids), [101]);
+  assert.equal((await browser.getTab(101)), undefined,
+    "Deleting a tab from the active group must close its live browser tab.");
+  assert.equal(Number.isInteger(deleted.windows[0].placeholderTabId), true,
+    "An open window emptied by tab deletion should receive the standard placeholder.");
+  assert.equal(deleted.operations.length, 0);
+});
+
+test("deleting a saved tab removes only its snapshot and keeps its inactive group", async () => {
+  const { controller, store, calls, browser } = setup();
+  const initial = await controller.getState();
+  const record = initial.tabs.find((tab) => tab.browserTabId === 101);
+  let destinationId;
+  await store.update((state) => {
+    const next = createGroup(state, { name: "Later" });
+    destinationId = next.groups.find((group) => group.name === "Later").id;
+    return next;
+  });
+  const moved = await controller.moveTab(101, destinationId);
+  assert.equal(moved.tabs.find((tab) => tab.id === record.id)?.status, "closed");
+
+  const deleted = await controller.deleteTab(record.id);
+
+  assert.equal(deleted.tabs.some((tab) => tab.id === record.id), false);
+  assert.equal(deleted.groups.some((group) => group.id === destinationId), true);
+  assert.deepEqual(calls.filter(([name]) => name === "remove").flatMap(([, ids]) => ids), [101],
+    "Deleting a saved snapshot should not issue another browser tab close.");
+  assert.equal(deleted.operations.length, 0);
+  assert.ok(await browser.getTab(101) === undefined,
+    "The tab was already closed when moved to the inactive group.");
+});
+
+test("failed tab deletion is recovered without re-adopting the live tab", async () => {
+  const first = setup([normalWindow()]);
+  const initial = await first.controller.getState();
+  const record = initial.tabs.find((tab) => tab.browserTabId === 101);
+  const removeTabs = first.browser.removeTabs.bind(first.browser);
+  let failOnce = true;
+  first.browser.removeTabs = async (ids) => {
+    if (failOnce) {
+      failOnce = false;
+      throw new Error("injected deletion failure");
+    }
+    await removeTabs(ids);
+  };
+
+  await assert.rejects(first.controller.deleteTab(101), /Could not delete the tab/);
+  assert.equal(first.store.snapshot().tabs.some((tab) => tab.id === record.id), false);
+  assert.equal(first.store.snapshot().operations[0].type, "delete-tab");
+
+  const restartedStore = new StateStore(first.storage, {
+    createInitialState: createInitialStateFactory(first.browser),
+  });
+  const restarted = new WorkspaceController({ store: restartedStore, browser: first.browser });
+  const recovered = await restarted.getState();
+
+  assert.equal(recovered.tabs.some((tab) => tab.id === record.id), false);
+  assert.equal(recovered.tabs.some((tab) => tab.url === record.url), false);
+  assert.equal(recovered.operations.length, 0);
+  assert.equal(await first.browser.getTab(101), undefined);
+  assert.equal(Number.isInteger(recovered.windows[0].placeholderTabId), true);
+});
+
 test("deleting the active group closes its tabs and activates an empty Default", async () => {
   const { controller, store, calls } = setup();
   const initial = await controller.getState();

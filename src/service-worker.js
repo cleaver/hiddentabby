@@ -44,6 +44,7 @@ export function registerServiceWorker(chromeApi, controller) {
       "group:delete": () => controller.deleteGroup(message.groupId),
       "group:switch": () => controller.switchGroup(message.groupId),
       "tab:move": () => controller.moveTab(message.tabId, message.groupId),
+      "tab:delete": () => controller.deleteTab(message.tabId),
       "brave:containers:open-settings": () => chromeApi.tabs.create({ url: "brave://settings/braveContent" }),
     };
     const command = commands[message.type];

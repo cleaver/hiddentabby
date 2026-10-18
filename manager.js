@@ -464,7 +464,7 @@ function makeTabRow(tab, state, windowLabels) {
 
   const moveToggle = makeButton(
     "",
-    "secondary tab-move-toggle",
+    "secondary tab-action-icon-button tab-move-toggle",
     () => {
       if (controlPanel.hidden) {
         controlPanel.hidden = false;
@@ -505,7 +505,35 @@ function makeTabRow(tab, state, windowLabels) {
   arrowPath.setAttribute("d", "M8 12h8m-3-3 3 3-3 3");
   moveIcon.append(folderPath, arrowPath);
   moveToggle.append(moveIcon);
-  controls.append(moveToggle, controlPanel);
+
+  const deleteButton = makeButton(
+    "",
+    "danger tab-action-icon-button tab-delete-button",
+    () => {
+      const identifier = tab.status === "open" ? tab.browserTabId : tab.id;
+      void refreshAfter(
+        () => command("tab:delete", { tabId: identifier }),
+        "Tab removed from group.",
+      );
+    },
+  );
+  deleteButton.setAttribute(
+    "aria-label",
+    `Delete ${tab.title || tab.url || "tab"} from group`,
+  );
+  deleteButton.setAttribute("title", "Delete tab from group");
+  deleteButton.dataset.tooltip = "Delete tab from group";
+  const deleteIcon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  deleteIcon.setAttribute("class", "tab-delete-icon");
+  deleteIcon.setAttribute("viewBox", "0 0 24 24");
+  deleteIcon.setAttribute("aria-hidden", "true");
+  deleteIcon.setAttribute("focusable", "false");
+  const deletePath = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  deletePath.setAttribute("d", "M4 7h16M10 11v6m4-6v6M6 7l1 13h10l1-13M9 7V4h6v3");
+  deleteIcon.append(deletePath);
+  deleteButton.append(deleteIcon);
+
+  controls.append(moveToggle, deleteButton, controlPanel);
   row.append(copy, controls);
   return row;
 }

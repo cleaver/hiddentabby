@@ -23,7 +23,7 @@ function setup() {
   const calls = [];
   const controller = Object.fromEntries([
     "initialize", "onTabCreated", "onTabActivated", "onTabUpdated", "onTabRemoved", "onWindowRemoved", "onTabAttached", "onTabMoved",
-    "moveTab", "getState", "createGroup", "renameGroup", "recolorGroup", "reorderGroups", "deleteGroup", "switchGroup",
+    "moveTab", "deleteTab", "getState", "createGroup", "renameGroup", "recolorGroup", "reorderGroups", "deleteGroup", "switchGroup",
   ].map((name) => [name, (...args) => { calls.push([name, ...args]); return Promise.resolve({ name, args }); }]));
   registerServiceWorker(chrome, controller);
   return { chrome, calls };
@@ -57,6 +57,22 @@ test("service worker answers extension messages and ignores unknown commands", a
 
   assert.deepEqual(calls, [["createGroup", { name: "Work" }]]);
   assert.deepEqual(responses, [{ ok: true, value: { name: "createGroup", args: [{ name: "Work" }] } }]);
+});
+
+test("service worker dispatches a tab deletion command by tab ID", async () => {
+  const { chrome, calls } = setup();
+  const responses = [];
+  const [accepted] = chrome.runtime.onMessage.fire(
+    { type: "tab:delete", tabId: "saved-record-1" },
+    {},
+    (value) => responses.push(value),
+  );
+
+  assert.equal(accepted, true);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(calls, [["deleteTab", "saved-record-1"]]);
+  assert.deepEqual(responses, [{ ok: true, value: { name: "deleteTab", args: ["saved-record-1"] } }]);
 });
 
 test("Brave Container settings command opens the fixed browser settings page", async () => {

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Add compact top-aligned tab actions and allow deleting open tabs or saved tab snapshots.
 - Add tab favicons, friendlier window labels, and compact selectable URLs to the manager.
 - Drag tabs between workspace groups in the manager.
 - Dismiss the tab move panel on outside click and add a Cancel action.
