@@ -141,6 +141,46 @@ async function clickGroup(client, name) {
   assert.notEqual(result.kind, "error", result.text);
 }
 
+async function dragTabToGroup(client, { tabUrl, sourceGroupName, destinationGroupName }) {
+  return client.evaluate(`(() => {
+    const row = [...document.querySelectorAll(".tab-row")]
+      .find((item) => item.querySelector(".tab-url")?.textContent === ${JSON.stringify(tabUrl)});
+    const source = row?.closest(".group-card");
+    const destination = [...document.querySelectorAll(".group-card")]
+      .find((card) => card.querySelector(".group-title")?.textContent === ${JSON.stringify(destinationGroupName)});
+    if (!row || !source || !destination
+      || source.querySelector(".group-title")?.textContent !== ${JSON.stringify(sourceGroupName)}) return null;
+    const dataTransfer = new DataTransfer();
+    row.dispatchEvent(new DragEvent("dragstart", { bubbles: true, dataTransfer }));
+    const dragStarted = {
+      draggable: row.draggable,
+      recordId: dataTransfer.getData("application/x-hiddentabby-tab-id"),
+      rowMarkedDragging: row.classList.contains("tab-row-dragging"),
+    };
+    const details = destination.querySelector(".group-disclosure");
+    const destinationInitiallyCollapsed = !details?.open;
+    const dragover = new DragEvent("dragover", { bubbles: true, cancelable: true, dataTransfer });
+    destination.dispatchEvent(dragover);
+    const dragoverFeedback = {
+      prevented: dragover.defaultPrevented,
+      targetMarked: destination.classList.contains("group-card-drop-target"),
+      destinationInitiallyCollapsed,
+    };
+    const drop = new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer });
+    destination.dispatchEvent(drop);
+    row.dispatchEvent(new DragEvent("dragend", { bubbles: true, dataTransfer }));
+    return {
+      sourceGroupId: source.dataset.groupId,
+      destinationGroupId: destination.dataset.groupId,
+      dragStarted,
+      dragoverFeedback,
+      dropPrevented: drop.defaultPrevented,
+      dragStylesCleaned: !row.classList.contains("tab-row-dragging")
+        && !destination.classList.contains("group-card-drop-target"),
+    };
+  })()`);
+}
+
 test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 120000 }, async (t) => {
   assert.ok(process.platform === "linux", "The installed-browser E2E harness currently targets Linux.");
   assert.ok(process.env.E2E_SKIP_BROWSER !== "1", "Browser E2E was disabled by E2E_SKIP_BROWSER.");
@@ -975,6 +1015,75 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
       + "&&item.querySelector('.tab-meta')?.textContent.startsWith('Default · Open')); const toggle=row?.querySelector('.tab-move-toggle'); const panel=row?.querySelector('.tab-move-panel'); toggle?.click(); const opened=!panel?.hidden; document.querySelector('#status')?.click(); return {opened,expanded:toggle?.getAttribute('aria-expanded'),panelHidden:panel?.hidden,rowMarkedOpen:row?.classList.contains('tab-row-move-open')}; })()");
     assert.deepEqual(outsideClickDismissal, { opened: true, expanded: "false", panelHidden: true, rowMarkedOpen: false },
       "Clicking outside the move component should dismiss it.");
+    const dragToCollapsedGroup = await dragTabToGroup(managerClient, {
+      tabUrl: qaTabUrl,
+      sourceGroupName: "Default",
+      destinationGroupName: "Group B",
+    });
+    assert.deepEqual(dragToCollapsedGroup, {
+      sourceGroupId: defaultGroup.id,
+      destinationGroupId: destinationGroup.id,
+      dragStarted: {
+        draggable: true,
+        recordId: moveTarget.recordId,
+        rowMarkedDragging: true,
+      },
+      dragoverFeedback: {
+        prevented: true,
+        targetMarked: true,
+        destinationInitiallyCollapsed: true,
+      },
+      dropPrevented: true,
+      dragStylesCleaned: true,
+    }, "Tab rows should drag onto any group card, including a collapsed card, with clear target feedback.");
+    const movedByDrop = await waitFor(
+      () => readState(managerClient),
+      (state) => state.tabs.some((tab) => tab.id === moveTarget.recordId
+        && tab.groupId === destinationGroup.id && tab.status === "closed"),
+      "drag a live tab to an inactive group",
+    );
+    assert.equal(movedByDrop.activeGroupId, defaultGroup.id,
+      "Dropping onto an inactive group should not switch the active group.");
+    const expandedGroupB = await managerClient.evaluate(`(() => {
+      const card = [...document.querySelectorAll(".group-card")]
+        .find((item) => item.querySelector(".group-title")?.textContent === "Group B");
+      const details = card?.querySelector(".group-disclosure");
+      if (!details) return false;
+      if (!details.open) details.querySelector(".group-summary").click();
+      return details.open;
+    })()`);
+    assert.equal(expandedGroupB, true, "The destination group should retain the dropped tab for a reverse drag.");
+    const dragBackToActiveGroup = await dragTabToGroup(managerClient, {
+      tabUrl: qaTabUrl,
+      sourceGroupName: "Group B",
+      destinationGroupName: "Default",
+    });
+    assert.deepEqual(dragBackToActiveGroup, {
+      sourceGroupId: destinationGroup.id,
+      destinationGroupId: defaultGroup.id,
+      dragStarted: {
+        draggable: true,
+        recordId: moveTarget.recordId,
+        rowMarkedDragging: true,
+      },
+      dragoverFeedback: {
+        prevented: true,
+        targetMarked: true,
+        destinationInitiallyCollapsed: false,
+      },
+      dropPrevented: true,
+      dragStylesCleaned: true,
+    }, "A saved tab should be draggable back into the active group.");
+    const restoredByDrop = await waitFor(
+      () => readState(managerClient),
+      (state) => state.activeGroupId === defaultGroup.id
+        && state.tabs.some((tab) => tab.id === moveTarget.recordId
+          && tab.groupId === defaultGroup.id && tab.status === "open"
+          && Number.isInteger(tab.browserTabId)),
+      "drag a saved tab into the active group",
+    );
+    assert.ok(restoredByDrop.tabs.find((tab) => tab.id === moveTarget.recordId)?.browserTabId,
+      "Moving a saved tab into the active group should restore it in the browser.");
     await managerClient.evaluate("(() => { const row=[...document.querySelectorAll('.tab-row')].find((item)=>item.querySelector('.tab-url')?.textContent==="
       + JSON.stringify(qaTabUrl)
       + "&&item.querySelector('.tab-meta')?.textContent.startsWith('Default · Open')); if(!row) throw new Error('QA tab row not found'); const toggle=row.querySelector('.tab-move-toggle'); const panel=row.querySelector('.tab-move-panel'); if(panel.hidden) toggle.click(); const select=panel.querySelector('select'); select.value="

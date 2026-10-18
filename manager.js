@@ -8,6 +8,8 @@ const openBraveContainerSettings = document.querySelector(
   "#open-brave-container-settings",
 );
 const collapsedGroupIds = new Set();
+const tabDragDataType = "application/x-hiddentabby-tab-id";
+let draggedTabId = null;
 
 const colors = [
   "grey",
@@ -86,6 +88,73 @@ document.addEventListener("click", (event) => {
   }
 });
 
+function getGroupCard(target) {
+  return target instanceof Element ? target.closest(".group-card[data-group-id]") : null;
+}
+
+function clearDropTargets() {
+  document.querySelectorAll(".group-card-drop-target").forEach((card) => {
+    card.classList.remove("group-card-drop-target");
+  });
+}
+
+groupsElement.addEventListener("dragstart", (event) => {
+  const row = event.target instanceof Element ? event.target.closest(".tab-row") : null;
+  if (!row || !event.dataTransfer || !row.dataset.tabId) return;
+  draggedTabId = row.dataset.tabId;
+  event.dataTransfer.setData(tabDragDataType, draggedTabId);
+  event.dataTransfer.effectAllowed = "move";
+  row.classList.add("tab-row-dragging");
+  const title = row.querySelector(".tab-title")?.textContent || "Tab";
+  setStatus(`Dragging ${title}. Drop it on a group.`);
+});
+
+groupsElement.addEventListener("dragover", (event) => {
+  const groupCard = getGroupCard(event.target);
+  if (!draggedTabId || !groupCard) return;
+  event.preventDefault();
+  if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+  clearDropTargets();
+  groupCard.classList.add("group-card-drop-target");
+});
+
+groupsElement.addEventListener("dragleave", (event) => {
+  const groupCard = getGroupCard(event.target);
+  if (!groupCard) return;
+  if (event.relatedTarget instanceof Node && groupCard.contains(event.relatedTarget)) return;
+  groupCard.classList.remove("group-card-drop-target");
+});
+
+groupsElement.addEventListener("drop", (event) => {
+  const groupCard = getGroupCard(event.target);
+  const tabId = event.dataTransfer?.getData(tabDragDataType) || draggedTabId;
+  if (!groupCard || !tabId || !groupCard.dataset.groupId) return;
+  event.preventDefault();
+  clearDropTargets();
+
+  const sourceRow = [...document.querySelectorAll(".tab-row")]
+    .find((row) => row.dataset.tabId === tabId);
+  const sourceGroupId = sourceRow?.closest(".group-card")?.dataset.groupId;
+  const destinationGroupId = groupCard.dataset.groupId;
+  if (sourceGroupId === destinationGroupId) {
+    setStatus("That tab is already in this group.");
+    return;
+  }
+
+  const destinationName = groupCard.dataset.groupName || "the selected group";
+  void refreshAfter(
+    () => command("tab:move", { tabId, groupId: destinationGroupId }),
+    `Moved tab to ${destinationName}.`,
+  );
+});
+
+groupsElement.addEventListener("dragend", (event) => {
+  const row = event.target instanceof Element ? event.target.closest(".tab-row") : null;
+  row?.classList.remove("tab-row-dragging");
+  clearDropTargets();
+  draggedTabId = null;
+});
+
 function makeColorPalette(selectedColor, label, groupId) {
   const palette = document.createElement("fieldset");
   palette.className = "color-palette";
@@ -135,6 +204,8 @@ function makeGroupCard(group, index, state) {
   const savedCount = groupTabs.length - openCount;
   const card = document.createElement("article");
   card.className = "group-card";
+  card.dataset.groupId = group.id;
+  card.dataset.groupName = group.name;
   const disclosure = document.createElement("details");
   disclosure.className = "group-disclosure";
   disclosure.dataset.groupId = group.id;
@@ -311,6 +382,8 @@ async function reorderAt(index, offset, state) {
 function makeTabRow(tab, state) {
   const row = document.createElement("article");
   row.className = "tab-row";
+  row.dataset.tabId = tab.id;
+  row.draggable = state.groups.length > 1;
   const copy = document.createElement("div");
   copy.className = "tab-copy";
   const title = document.createElement("p");

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Drag tabs between workspace groups in the manager.
 - Dismiss the tab move panel on outside click and add a Cancel action.
 - Cap expanded groups at a scrollable height and limit masonry layout to three responsive columns.
 - Organize saved and open tabs inside expandable workspace groups in the manager.
