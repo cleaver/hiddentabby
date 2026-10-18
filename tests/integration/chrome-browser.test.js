@@ -32,7 +32,10 @@ function fakeChrome() {
     runtime: { getURL: (path) => `chrome-extension://test/${path}` },
     windows: {
       getAll: async () => structuredClone(windows),
+      getLastFocused: async () => structuredClone(windows.find((window) => window.focused) ?? windows[0]),
       create: async (properties) => ({ id: 20, ...properties }),
+      remove: async (id) => calls.push(["windowRemove", id]),
+      update: async (id, properties) => calls.push(["windowUpdate", id, properties]),
     },
     tabs: {
       query: async (query = {}) => {
@@ -93,6 +96,43 @@ test("normal window query excludes incognito and popup windows", async () => {
   assert.deepEqual(windows[0].tabs.map((tab) => tab.id), [1, 2]);
   assert.equal(browser.isPlaceholderUrl("chrome-extension://test/placeholder.html"), true);
   assert.equal(browser.isPlaceholderUrl("chrome://newtab/"), false);
+});
+
+test("last-focused window query excludes incognito and nonnormal windows", async () => {
+  const { chrome, windows } = fakeChrome();
+  windows[0].focused = false;
+  windows[1].focused = true;
+  const browser = createChromeBrowserApi(chrome);
+
+  const incognito = await browser.getLastFocusedWindow();
+  assert.equal(incognito, null);
+
+  windows[1].focused = false;
+  windows[2].focused = true;
+  const popup = await browser.getLastFocusedWindow();
+  assert.equal(popup, null);
+
+  windows[2].focused = false;
+  windows[0].focused = true;
+  assert.equal((await browser.getLastFocusedWindow()).id, 10);
+});
+
+test("window closure delegates to the normal Chromium windows API", async () => {
+  const { chrome, calls } = fakeChrome();
+  const browser = createChromeBrowserApi(chrome);
+
+  await browser.removeWindow(12);
+
+  assert.deepEqual(calls, [["windowRemove", 12]]);
+});
+
+test("window focus delegates to the normal Chromium windows API", async () => {
+  const { chrome, calls } = fakeChrome();
+  const browser = createChromeBrowserApi(chrome);
+
+  await browser.focusWindow(10);
+
+  assert.deepEqual(calls, [["windowUpdate", 10, { focused: true }]]);
 });
 
 test("first-run native groups replace existing groups for unpinned managed tabs", async () => {

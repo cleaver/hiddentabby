@@ -2,6 +2,47 @@ export const STATE_VERSION = 1;
 export const DEFAULT_GROUP_NAME = "Default";
 export const DEFAULT_GROUP_COLOR = "grey";
 
+const BROWSER_NEW_TAB_URLS = new Set([
+  "chrome://newtab",
+  "chrome://new-tab-page",
+  "brave://newtab",
+]);
+
+export function isMeaningfulTab(tab, isPlaceholderUrl = () => false) {
+  if (!tab || tab.pinned) return false;
+  const url = typeof tab.pendingUrl === "string" && tab.pendingUrl
+    ? tab.pendingUrl
+    : tab.url;
+  if (typeof url !== "string" || !url) return false;
+  if (isPlaceholderUrl(url)) return false;
+  return !isBrowserNewTabPage(tab);
+}
+
+export function isRememberedTab(state, tab, isPlaceholderUrl = () => false) {
+  if (isMeaningfulTab(tab, isPlaceholderUrl)) return true;
+  return isBrowserNewTabPage(tab) && state.tabs.some((candidate) => candidate.id !== tab.id
+    && candidate.groupId === tab.groupId
+    && candidate.windowId === tab.windowId
+    && isMeaningfulTab(candidate, isPlaceholderUrl));
+}
+
+function isBrowserNewTabPage(tab) {
+  if (!tab) return false;
+  const url = typeof tab.pendingUrl === "string" && tab.pendingUrl
+    ? tab.pendingUrl
+    : tab.url;
+  if (typeof url !== "string" || !url) return false;
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  const normalized = `${parsed.protocol}//${parsed.hostname}`.toLocaleLowerCase();
+  return BROWSER_NEW_TAB_URLS.has(normalized)
+    || normalized === "chrome-search://local-ntp" && parsed.pathname === "/local-ntp.html";
+}
+
 const TAB_GROUP_COLORS = new Set([
   "grey",
   "blue",
@@ -186,40 +227,91 @@ export function moveTab(state, tabId, destinationGroupId) {
   };
 }
 
-export function planGroupSwitch(state, destinationGroupId) {
+export function planGroupSwitch(state, destinationGroupId, { isPlaceholderUrl = () => false } = {}) {
   requireGroup(state, destinationGroupId);
   if (destinationGroupId === state.activeGroupId) {
-    return { state, closeTabs: [], restoreTabs: [], placeholderWindowIds: [], removePlaceholderWindowIds: [], recreateWindowIds: [] };
+    const discardTabIds = state.tabs
+      .filter((tab) => !isRememberedTab(state, tab, isPlaceholderUrl))
+      .map((tab) => tab.id);
+    const discardIds = new Set(discardTabIds);
+    const restoreTabs = state.tabs.filter((tab) => tab.groupId === destinationGroupId
+      && tab.status === "closed" && isRememberedTab(state, tab, isPlaceholderUrl));
+    const destinationWindowIds = new Set(restoreTabs.map((tab) => tab.windowId));
+    return {
+      state: { ...state, tabs: state.tabs.filter((tab) => !discardIds.has(tab.id)) },
+      closeTabs: state.tabs.filter((tab) => tab.status === "open" && discardIds.has(tab.id)),
+      restoreTabs,
+      placeholderWindowIds: [],
+      removePlaceholderWindowIds: [],
+      recreateWindowIds: state.windows
+        .filter((window) => window.isOpen === false && destinationWindowIds.has(window.id))
+        .map((window) => window.browserWindowId),
+      closeWindowIds: [],
+      discardTabIds,
+      createTemporaryWindow: false,
+    };
   }
 
-  const closeTabs = state.tabs.filter((tab) => tab.groupId !== destinationGroupId && tab.status === "open");
-  const restoreTabs = state.tabs.filter((tab) => tab.groupId === destinationGroupId && tab.status === "closed");
-  const placeholderWindowIds = state.windows
-    .filter((window) => window.isOpen !== false)
-    .filter((window) => window.placeholderTabId === null
-      && !state.tabs.some((tab) => tab.groupId === destinationGroupId
-        && tab.browserWindowId === window.browserWindowId))
-    .map((window) => window.browserWindowId);
-  const destinationWindowIds = new Set(state.tabs
-    .filter((tab) => tab.groupId === destinationGroupId)
-    .map((tab) => tab.browserWindowId));
+  const discardTabIds = state.tabs
+    .filter((tab) => !isRememberedTab(state, tab, isPlaceholderUrl))
+    .map((tab) => tab.id);
+  const discardIds = new Set(discardTabIds);
+  const destinationTabs = state.tabs.filter((tab) => tab.groupId === destinationGroupId
+    && isRememberedTab(state, tab, isPlaceholderUrl));
+  const destinationWindowIds = new Set(destinationTabs.map((tab) => tab.windowId));
+  const closeTabs = state.tabs.filter((tab) => tab.status === "open"
+    && (tab.groupId !== destinationGroupId || discardIds.has(tab.id)));
+  const restoreTabs = destinationTabs.filter((tab) => tab.status === "closed");
+  const openWindows = state.windows.filter((window) => window.isOpen !== false);
+  const pinnedWindows = openWindows.filter((window) => (window.pinnedTabIds ?? []).length > 0);
+  const keepWindowIds = new Set([
+    ...destinationWindowIds,
+    ...pinnedWindows.map((window) => window.id),
+  ]);
+  const placeholderWindowIds = [];
+  let createTemporaryWindow = false;
+
+  if (!destinationWindowIds.size && !pinnedWindows.length) {
+    const temporaryWindow = openWindows.find((window) => window.placeholderTabId !== null)
+      ?? openWindows[0];
+    if (temporaryWindow) {
+      keepWindowIds.add(temporaryWindow.id);
+      if (temporaryWindow.placeholderTabId === null) {
+        placeholderWindowIds.push(temporaryWindow.browserWindowId);
+      }
+    } else {
+      createTemporaryWindow = true;
+    }
+  }
+
   const removePlaceholderWindowIds = state.windows
-    .filter((window) => destinationWindowIds.has(window.browserWindowId))
     .filter((window) => window.isOpen !== false)
     .filter((window) => window.placeholderTabId !== null)
+    .filter((window) => destinationWindowIds.has(window.id)
+      || pinnedWindows.some((pinnedWindow) => pinnedWindow.id === window.id))
     .map((window) => window.browserWindowId);
   const recreateWindowIds = state.windows
     .filter((window) => window.isOpen === false)
-    .filter((window) => destinationWindowIds.has(window.browserWindowId))
+    .filter((window) => destinationWindowIds.has(window.id))
+    .map((window) => window.browserWindowId);
+  const closeWindowIds = openWindows
+    .filter((window) => !keepWindowIds.has(window.id))
     .map((window) => window.browserWindowId);
 
   return {
-    state: { ...state, activeGroupId: destinationGroupId },
+    state: {
+      ...state,
+      activeGroupId: destinationGroupId,
+      tabs: state.tabs.filter((tab) => !discardIds.has(tab.id)),
+    },
     closeTabs,
     restoreTabs,
     placeholderWindowIds,
     removePlaceholderWindowIds,
     recreateWindowIds,
+    closeWindowIds,
+    discardTabIds,
+    createTemporaryWindow,
   };
 }
 
@@ -319,15 +411,7 @@ export function markTabClosed(state, browserTabId, sessionId = null) {
 
 export function handleTabRemoved(state, browserTabId, removeInfo = {}) {
   if (removeInfo.isWindowClosing && Number.isInteger(removeInfo.windowId)) {
-    return {
-      ...state,
-      tabs: state.tabs.map((tab) => tab.browserWindowId === removeInfo.windowId
-        ? { ...tab, browserTabId: null, sessionId: null, status: "closed" }
-        : tab),
-      windows: state.windows.map((window) => window.browserWindowId === removeInfo.windowId
-        ? { ...window, isOpen: false, placeholderTabId: null, pinnedTabIds: [] }
-        : window),
-    };
+    return handleWindowRemoved(state, removeInfo.windowId, { preserveTabs: true });
   }
 
   return {
@@ -341,6 +425,63 @@ export function handleTabRemoved(state, browserTabId, removeInfo = {}) {
   };
 }
 
+export function handleWindowRemoved(state, browserWindowId, { preserveTabs = false } = {}) {
+  const tabs = preserveTabs
+    ? state.tabs.map((tab) => tab.browserWindowId === browserWindowId && tab.status === "open"
+      ? { ...tab, browserTabId: null, sessionId: null, status: "closed" }
+      : tab)
+    : state.tabs.filter((tab) => tab.browserWindowId !== browserWindowId
+      || tab.groupId !== state.activeGroupId);
+
+  return pruneUnreferencedWindows({
+    ...state,
+    tabs,
+    windows: state.windows.map((window) => window.browserWindowId === browserWindowId
+      ? { ...window, isOpen: false, placeholderTabId: null, pinnedTabIds: [] }
+      : window),
+  });
+}
+
+export function pruneUnreferencedWindows(state, ignoredOperationId = null) {
+  const logicalWindowIds = new Set(state.tabs.map((tab) => tab.windowId));
+  const browserWindowIds = new Set();
+  const addRecord = (record) => {
+    if (typeof record?.windowId === "string") logicalWindowIds.add(record.windowId);
+    if (Number.isInteger(record?.browserWindowId)) browserWindowIds.add(record.browserWindowId);
+  };
+
+  for (const operation of state.operations) {
+    if (operation.id === ignoredOperationId) continue;
+    const payload = operation.payload;
+    for (const record of [...(payload.closeRecords ?? []), ...(payload.deletedRecords ?? [])]) addRecord(record);
+    addRecord(payload.closeRecord);
+    for (const id of [
+      ...(payload.recreateWindowRecordIds ?? []),
+      ...(payload.createdWindowRecordIds ?? []),
+      ...(payload.restoredWindowRecordIds ?? []),
+      ...(payload.userClosedWindowRecordIds ?? []),
+      payload.temporaryWindowId,
+    ]) {
+      if (typeof id === "string") logicalWindowIds.add(id);
+    }
+    for (const id of [
+      ...(payload.closeWindowIds ?? []),
+      ...(payload.windowCloseStartedIds ?? []),
+      ...(payload.placeholderWindowIds ?? []),
+      ...(payload.removePlaceholderWindowIds ?? []),
+    ]) {
+      if (Number.isInteger(id)) browserWindowIds.add(id);
+    }
+  }
+
+  return {
+    ...state,
+    windows: state.windows.filter((window) => window.isOpen
+      || logicalWindowIds.has(window.id)
+      || browserWindowIds.has(window.browserWindowId)),
+  };
+}
+
 function normalizeTab(tab, groupId, createId, existingId = null) {
   if (!Number.isInteger(tab.windowId)) throw new Error("A tab must belong to a normal browser window.");
 
@@ -350,7 +491,9 @@ function normalizeTab(tab, groupId, createId, existingId = null) {
     browserWindowId: tab.windowId,
     windowId: tab.windowKey ?? tab.windowId,
     groupId,
-    url: typeof tab.url === "string" ? tab.url : "",
+    url: typeof tab.pendingUrl === "string" && tab.pendingUrl
+      ? tab.pendingUrl
+      : typeof tab.url === "string" ? tab.url : "",
     title: typeof tab.title === "string" ? tab.title : "",
     faviconUrl: typeof tab.favIconUrl === "string" ? tab.favIconUrl : "",
     index: Number.isInteger(tab.index) ? tab.index : 0,

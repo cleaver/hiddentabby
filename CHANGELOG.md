@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Restore each group's useful window layout, keep pinned windows open, and forget active-group tabs when users close a nonfinal window.
+- Preserve group snapshots when the final normal browser window closes; keep empty groups usable with pinned windows or one temporary placeholder window.
+- Focus a useful selected-group window after switching, including when the window that initiated the switch closes.
 - Forget tabs closed while the background worker starts, preventing them from returning on workspace switches.
 - Add compact top-aligned tab actions and allow deleting open tabs or saved tab snapshots.
 - Add tab favicons, friendlier window labels, and compact selectable URLs to the manager.

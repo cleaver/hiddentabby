@@ -576,28 +576,28 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
     const dormantWindow = await popup.client.evaluate(
       "chrome.windows.create({url:'data:text/html,<title>Dormant window probe</title>',focused:false}).then((window)=>({windowId:window.id,tabId:window.tabs[0].id}))",
     );
-    const stateBeforeDormantClose = await waitFor(
+    const stateBeforeUserClosedWindow = await waitFor(
       () => readState(popup.client),
       (state) => state.tabs.some((tab) => tab.browserTabId === dormantWindow.tabId
         && tab.status === "open")
         && state.windows.some((window) => window.browserWindowId === dormantWindow.windowId && window.isOpen),
       "new window tab adoption",
     );
-    const dormantRecordBeforeClose = stateBeforeDormantClose.tabs
+    const userClosedWindowRecord = stateBeforeUserClosedWindow.tabs
       .find((tab) => tab.browserTabId === dormantWindow.tabId);
     await popup.client.evaluate("chrome.windows.remove(" + dormantWindow.windowId + ")");
-    const dormantState = await waitFor(
+    const stateAfterUserClosedWindow = await waitFor(
       () => readState(popup.client),
       (state) => {
-        const record = state.tabs.find((tab) => tab.id === dormantRecordBeforeClose.id);
-        const window = state.windows.find((item) => item.id === dormantRecordBeforeClose.windowId);
-        return record?.status === "closed" && record.browserTabId === null && window?.isOpen === false;
+        const window = state.windows.find((item) => item.id === userClosedWindowRecord.windowId);
+        return !state.tabs.some((tab) => tab.id === userClosedWindowRecord.id)
+          && (!window || window.isOpen === false);
       },
-      "window closure preserves dormant tab snapshots",
+      "user-closed nonfinal window forgets its active-group tabs",
     );
-    assert.ok(dormantState.tabs.some((tab) => tab.id === dormantRecordBeforeClose.id
-      && tab.groupId === defaultGroup.id && tab.status === "closed"));
-    const originalDefaultRecordIds = dormantState.tabs
+    assert.equal(stateAfterUserClosedWindow.tabs.some((tab) => tab.id === userClosedWindowRecord.id), false,
+      "A tab closed with its window must not be restored after later group switches.");
+    const originalDefaultRecordIds = stateAfterUserClosedWindow.tabs
       .filter((tab) => tab.groupId === defaultGroup.id)
       .map((tab) => tab.id);
     await clickGroup(popup.client, "Group B");
@@ -607,19 +607,16 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
       return { state, tabs };
     }, ({ state, tabs }) => state.activeGroupId === destinationGroup.id
       && state.windows.filter((window) => window.isOpen).length === 2
-      && state.windows.filter((window) => window.isOpen).every((window) => Number.isInteger(window.placeholderTabId))
+      && state.windows.filter((window) => window.isOpen).every((window) => window.pinnedTabIds.length > 0
+        && window.placeholderTabId === null)
       && originalDefaultRecordIds.every((recordId) => state.tabs.find((tab) => tab.id === recordId)?.status === "closed")
       && !tabs.some((tab) => tab.id === firstWindowTabs.tabId || tab.id === secondWindow.tabId),
-    "global switch and empty-window placeholders");
+    "global switch keeps pinned windows open without blank placeholders");
     assert.ok(switchedState.tabs.some((tab) => tab.id === firstWindowTabs.pinnedTabId && tab.pinned));
     assert.ok(switchedState.tabs.some((tab) => tab.id === secondWindow.pinnedTabId && tab.pinned));
     assert.equal(switchedState.state.windows.filter((window) => window.isOpen).length, 2);
-    for (const window of switchedState.state.windows.filter((item) => item.isOpen)) {
-      const placeholder = switchedState.tabs.find((tab) => tab.id === window.placeholderTabId);
-      assert.ok(placeholder, "Each empty window should retain one placeholder tab.");
-      assert.equal(placeholder.groupId, -1, "The New Tab placeholder must stay outside all groups.");
-      assert.match(placeholder.url, /placeholder\.html/);
-    }
+    assert.ok(switchedState.state.windows.filter((item) => item.isOpen)
+      .every((window) => window.placeholderTabId === null));
     const closedDuplicateRecords = switchedState.state.tabs
       .filter((tab) => duplicateRecordIds.includes(tab.id))
       .map((tab) => ({ id: tab.id, index: tab.index, sessionId: tab.sessionId, status: tab.status }));
@@ -627,28 +624,18 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
       + JSON.stringify(fixtureUrl)
       + ").map((item)=>({sessionId:item.tab.sessionId,index:item.tab.index,windowId:item.tab.windowId,url:item.tab.url,lastModified:item.lastModified})))");
 
-    const firstLogicalWindow = switchedState.state.windows.find((window) => window.browserWindowId === firstWindowId);
-    const navigatedPlaceholder = await popup.client.evaluate("chrome.tabs.update("
-      + firstLogicalWindow.placeholderTabId
-      + ", {url:" + JSON.stringify(fixtureUrl)
+    const activeGroupTab = await popup.client.evaluate("chrome.tabs.create({windowId:"
+      + firstWindowId
+      + ",url:" + JSON.stringify(fixtureUrl)
       + ",active:false}).then((tab)=>({id:tab.id,url:tab.url,pendingUrl:tab.pendingUrl,groupId:tab.groupId}))");
-    let promotedState;
-    try {
-      promotedState = await waitFor(
-        () => readState(popup.client),
-        (state) => state.tabs.some((tab) => tab.browserTabId === firstLogicalWindow.placeholderTabId
-          && tab.groupId === destinationGroup.id && tab.status === "open")
-          && state.windows.find((window) => window.id === firstLogicalWindow.id)?.placeholderTabId === null,
-        "placeholder navigation promotion",
-      );
-    } catch (error) {
-      const currentTab = await popup.client.evaluate("chrome.tabs.get("
-        + firstLogicalWindow.placeholderTabId
-        + ").then((tab)=>({id:tab.id,url:tab.url,pendingUrl:tab.pendingUrl,status:tab.status,groupId:tab.groupId}))");
-      throw new Error(error.message + " Navigation response: " + JSON.stringify(navigatedPlaceholder)
-        + "; live tab: " + JSON.stringify(currentTab));
-    }
-    assert.ok(promotedState.tabs.some((tab) => tab.url === fixtureUrl));
+    const activeGroupTabState = await waitFor(
+      () => readState(popup.client),
+      (state) => state.tabs.some((tab) => tab.browserTabId === activeGroupTab.id
+        && tab.groupId === destinationGroup.id && tab.status === "open"),
+      "new tab joins the currently active group",
+    );
+    assert.ok(activeGroupTabState.tabs.some((tab) => tab.browserTabId === activeGroupTab.id
+      && tab.url === fixtureUrl));
 
     await clickGroup(popup.client, "Default");
     const restoredDefaultState = await waitFor(
@@ -684,18 +671,8 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
       + JSON.stringify(manualCloseProbe.url)
       + ").map((tab)=>({id:tab.id,url:tab.url})))");
     assert.deepEqual(manuallyClosedTabs, [], "A manually closed tab must stay gone across a group switch.");
-    const restoredDormantWindow = restoredDefaultState.windows.find(
-      (window) => window.id === dormantRecordBeforeClose.windowId,
-    );
-    const dormantWindowPlaceholders = await popup.client.evaluate("chrome.tabs.query({windowId:"
-      + restoredDormantWindow.browserWindowId
-      + "}).then((tabs)=>tabs.filter((tab)=>tab.url?.includes('/placeholder.html')||tab.pendingUrl?.includes('/placeholder.html')).map((tab)=>({id:tab.id,url:tab.url,pendingUrl:tab.pendingUrl})))");
-    const creationTrace = await popup.client.evaluate(
-      "window.__secondWindowTrace.filter((event)=>event.event==='created')",
-    );
-    assert.equal(dormantWindowPlaceholders.length, 0,
-      "Restoring the real group tab should remove the one placeholder created for the dormant window. Tabs: "
-        + JSON.stringify(dormantWindowPlaceholders) + "; creation trace: " + JSON.stringify(creationTrace));
+    assert.equal(restoredDefaultState.tabs.some((tab) => tab.id === userClosedWindowRecord.id), false,
+      "Switching back must not bring back tabs closed with their nonfinal window.");
     assert.ok(restoredDefaultState.tabs.some((tab) => tab.groupId === destinationGroup.id && tab.status === "closed"));
     const restoredDuplicateRecords = restoredDefaultState.tabs
       .filter((tab) => duplicateRecordIds.includes(tab.id) && tab.status === "open");
@@ -784,11 +761,11 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
       "The singleton tab must remain logically assigned to Default in HiddenTabby.");
     const fixtureFaviconState = await waitFor(
       () => readState(popup.client),
-      (state) => state.tabs.some((tab) => tab.url === fixtureUrl
+      (state) => state.tabs.some((tab) => tab.id === duplicateRecordIds[0]
         && tab.faviconUrl?.endsWith("/favicon.svg")),
       "fixture favicon tracking",
     );
-    const fixtureFaviconUrl = fixtureFaviconState.tabs.find((tab) => tab.url === fixtureUrl)?.faviconUrl;
+    const fixtureFaviconUrl = fixtureFaviconState.tabs.find((tab) => tab.id === duplicateRecordIds[0])?.faviconUrl;
     await popup.client.evaluate("document.querySelector('#open-manager').click()");
     const manager = await waitFor(async () => {
       const target = (await browserTargets(endpointUrl)).find((candidate) => candidate.url.endsWith("/manager.html"));
@@ -879,6 +856,10 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
       () => managerClient.evaluate(`(async () => {
         const response = await chrome.runtime.sendMessage({type: "state:get"});
         const record = response.value.tabs.find((tab) => tab.id === ${JSON.stringify(duplicateRecordIds[0])});
+        const card = [...document.querySelectorAll(".group-card")]
+          .find((item) => item.dataset.groupId === record?.groupId);
+        const disclosure = card?.querySelector(".group-disclosure");
+        if (disclosure && !disclosure.open) disclosure.open = true;
         const row = [...document.querySelectorAll(".tab-row")]
           .find((item) => item.dataset.tabId === record?.id);
         const icon = row?.querySelector(".tab-favicon img");
@@ -1215,6 +1196,84 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
 
     await clickGroup(popup.client, "Default");
     await waitFor(() => readState(popup.client), (state) => state.activeGroupId === defaultGroup.id, "return to Default");
+
+    const closingManagerUrl = "chrome-extension://" + extensionId + "/manager.html?window-lifecycle-test=1";
+    const closingManagerWindow = await popup.client.evaluate("(async()=>{const window=await chrome.windows.create({url:"
+      + JSON.stringify(closingManagerUrl)
+      + ",focused:true}); const tabs=await chrome.tabs.query({windowId:window.id}); return {windowId:window.id,tabId:tabs[0].id};})()");
+    const managerStateBeforeSwitch = await waitFor(
+      () => readState(popup.client),
+      (state) => state.tabs.some((tab) => tab.browserTabId === closingManagerWindow.tabId
+        && tab.groupId === defaultGroup.id && tab.status === "open"),
+      "manager tab adopted into Default before its window closes",
+    );
+    const closingManagerRecord = managerStateBeforeSwitch.tabs
+      .find((tab) => tab.browserTabId === closingManagerWindow.tabId);
+    const closingManagerTarget = await waitFor(async () => (await browserTargets(endpointUrl))
+      .find((target) => target.url === closingManagerUrl) ?? null,
+    Boolean, "manager page opened in a disposable window");
+    const closingManagerClient = await DevToolsClient.connect(closingManagerTarget.webSocketDebuggerUrl);
+    browserClients.push(closingManagerClient);
+    await waitFor(() => closingManagerClient.evaluate("document.readyState"),
+      (value) => value === "complete", "disposable manager page load");
+    const focusedManagerWindowBeforeSwitch = await popup.client.evaluate(
+      "chrome.windows.getLastFocused({populate:false}).then((window)=>window.id)",
+    );
+    assert.equal(focusedManagerWindowBeforeSwitch, closingManagerWindow.windowId,
+      "The manager's browser window should be focused when it initiates the switch.");
+    await closingManagerClient.evaluate("(() => { const button=document.querySelector('.group-card[data-group-id=\""
+      + destinationGroup.id
+      + "\"] .group-actions button'); if(!button || button.textContent.trim()!=='Switch to group') throw new Error('Destination group switch button not found'); button.click(); return true; })()");
+    const stateAfterManagerWindowClose = await waitFor(
+      () => readState(popup.client),
+      (state) => state.activeGroupId === destinationGroup.id && state.operations.length === 0,
+      "switch completes after its manager window closes",
+    );
+    const liveWindowsAfterManagerClose = await popup.client.evaluate(
+      "chrome.windows.getAll({populate:false,windowTypes:['normal']}).then((windows)=>windows.map((window)=>window.id))",
+    );
+    assert.equal(liveWindowsAfterManagerClose.includes(closingManagerWindow.windowId), false,
+      "A manager window outside the destination layout closes as part of the switch.");
+    const destinationWindowIds = stateAfterManagerWindowClose.tabs
+      .filter((tab) => tab.groupId === destinationGroup.id && tab.status === "open")
+      .map((tab) => stateAfterManagerWindowClose.windows
+        .find((window) => window.id === tab.windowId)?.browserWindowId)
+      .filter(Number.isInteger);
+    assert.ok(destinationWindowIds.length > 0, "The destination group should have a useful window to focus.");
+    const destinationLastActiveTabIds = stateAfterManagerWindowClose.tabs
+      .filter((tab) => tab.groupId === destinationGroup.id && tab.status === "open" && tab.lastActive)
+      .map((tab) => tab.browserTabId)
+      .filter(Number.isInteger);
+    const activeDestinationTabIds = await popup.client.evaluate(
+      "chrome.tabs.query({}).then((tabs)=>tabs.filter((tab)=>tab.active&&"
+        + JSON.stringify(destinationLastActiveTabIds)
+        + ".includes(tab.id)).map((tab)=>tab.id))",
+    );
+    assert.ok(activeDestinationTabIds.length > 0,
+      "The destination group's last-active tab should be selected after its manager window closes.");
+    const managerSnapshotAfterSwitch = stateAfterManagerWindowClose.tabs
+      .find((tab) => tab.id === closingManagerRecord.id);
+    if (managerSnapshotAfterSwitch) {
+      const deleteManagerSnapshot = await popup.client.evaluate("chrome.runtime.sendMessage({type:'tab:delete',tabId:"
+        + JSON.stringify(closingManagerRecord.id)
+        + "})");
+      assert.equal(deleteManagerSnapshot.ok, true, deleteManagerSnapshot.error);
+    }
+    const afterManagerSnapshotDelete = await waitFor(
+      () => readState(popup.client),
+      (state) => !state.tabs.some((tab) => tab.id === closingManagerRecord.id),
+      "finish reconciling the manager tab after its containing window closes",
+    );
+    assert.equal(afterManagerSnapshotDelete.windows.some((window) =>
+      window.id === closingManagerRecord.windowId && window.isOpen), false,
+    "The closed manager window stays out of the active browser layout.");
+    const restoreDefaultAfterManager = await popup.client.evaluate("chrome.runtime.sendMessage({type:'group:switch',groupId:"
+      + JSON.stringify(defaultGroup.id)
+      + "})");
+    assert.equal(restoreDefaultAfterManager.ok, true, restoreDefaultAfterManager.error);
+    await waitFor(() => readState(popup.client), (state) => state.activeGroupId === defaultGroup.id,
+      "restore Default after the manager-window lifecycle check");
+
     await popup.client.evaluate("document.querySelector('#open-manager').click()");
     const managerAgain = await waitFor(async () => {
       const target = (await browserTargets(endpointUrl)).find((candidate) => candidate.url.endsWith("/manager.html"));
@@ -1353,7 +1412,8 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
       () => readState(popup.client),
       (state) => !state.tabs.some((tab) => tab.id === secondTabRecord.id)
         && state.operations.length === 0
-        && Number.isInteger(state.windows.find((window) => window.id === activeDeleteRecord.windowId)?.placeholderTabId),
+        && (state.windows.find((window) => window.id === activeDeleteRecord.windowId)?.pinnedTabIds.length > 0
+          || Number.isInteger(state.windows.find((window) => window.id === activeDeleteRecord.windowId)?.placeholderTabId)),
       "delete the active tab and preserve its empty window",
     );
     assert.ok(afterActiveTabDelete.groups.some((group) => group.id === defaultGroup.id),
@@ -1386,6 +1446,10 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
     const replacementDefault = afterDefaultDelete.groups.find((group) => group.name === "Default");
     assert.equal(afterDefaultDelete.activeGroupId, replacementDefault.id);
     assert.equal(afterDefaultDelete.tabs.some((tab) => tab.groupId === defaultGroup.id), false);
+    assert.ok(afterDefaultDelete.windows.filter((window) => window.isOpen).every((window) =>
+      window.pinnedTabIds.length > 0 && window.placeholderTabId === null),
+    "Deleting the active group should retain pinned windows and remove their temporary placeholders: "
+      + JSON.stringify(afterDefaultDelete.windows.filter((window) => window.isOpen)));
     const liveAfterDefaultDelete = await popup.client.evaluate("chrome.tabs.query({}).then((tabs)=>tabs.map((tab)=>tab.id))");
     assert.ok(defaultRecordsToDelete.every((tabId) => !liveAfterDefaultDelete.includes(tabId)),
       "Deleting Default should close every captured open member tab.");
@@ -1420,29 +1484,37 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
         && state.operations.length === 0,
       "delete final other group without restoring its tabs",
     );
+    assert.ok(finalState.windows.filter((window) => window.isOpen).every((window) =>
+      window.pinnedTabIds.length > 0 && window.placeholderTabId === null),
+    "Deleting an inactive group should not add temporary placeholders: "
+      + JSON.stringify(finalState.windows.filter((window) => window.isOpen)));
     const liveAfterOtherDelete = await popup.client.evaluate("chrome.tabs.query({}).then((tabs)=>tabs.map((tab)=>({id:tab.id,url:tab.url,pinned:tab.pinned,windowId:tab.windowId})))");
     assert.equal(finalState.tabs.length, 0,
       "Deleting the final non-Default group should not reassign its tabs. State: "
         + JSON.stringify(finalState) + "; live tabs: " + JSON.stringify(liveAfterOtherDelete)
         + "; browser events: " + JSON.stringify(await popup.client.evaluate("window.__secondWindowTrace")));
-    assert.ok(finalState.windows.filter((window) => window.isOpen).every((window) => Number.isInteger(window.placeholderTabId)));
+    assert.ok(finalState.windows.filter((window) => window.isOpen).every((window) =>
+      window.pinnedTabIds.length > 0 || Number.isInteger(window.placeholderTabId)));
 
-    const finalBrowserEvidence = await popup.client.evaluate("(async () => { const state=(await chrome.runtime.sendMessage({type:'state:get'})).value; const tabs=await chrome.tabs.query({}); const recent=await chrome.sessions.getRecentlyClosed({maxResults:25}); return {groups:state.groups,tabs:state.tabs,windowCount:state.windows.filter((item)=>item.isOpen).length,placeholders:state.windows.filter((item)=>item.isOpen).map((item)=>item.placeholderTabId),pinned:tabs.filter((tab)=>tab.pinned).length,recentTabSessions:recent.filter((session)=>session.tab).length,sidePanelSupported:Boolean(chrome.sidePanel?.open)}; })()");
+    const finalBrowserEvidence = await popup.client.evaluate("(async () => { const state=(await chrome.runtime.sendMessage({type:'state:get'})).value; const tabs=await chrome.tabs.query({}); const recent=await chrome.sessions.getRecentlyClosed({maxResults:25}); return {groups:state.groups,tabs:state.tabs,windowCount:state.windows.filter((item)=>item.isOpen).length,placeholders:state.windows.filter((item)=>item.isOpen).map((item)=>item.placeholderTabId),windowDetails:state.windows.filter((item)=>item.isOpen).map(({id,browserWindowId,pinnedTabIds,placeholderTabId})=>({id,browserWindowId,pinnedTabIds,placeholderTabId})),pinned:tabs.filter((tab)=>tab.pinned).length,recentTabSessions:recent.filter((session)=>session.tab).length,sidePanelSupported:Boolean(chrome.sidePanel?.open)}; })()");
     assert.equal(finalBrowserEvidence.groups[0].name, "Default");
     assert.equal(finalBrowserEvidence.tabs.length, 0);
-    assert.equal(finalBrowserEvidence.windowCount, 3,
-      "The closed test window should be recreated when its Default tab is restored.");
-    assert.equal(finalBrowserEvidence.placeholders.length, 3);
+    assert.equal(finalBrowserEvidence.windowCount, 2,
+      "The explicitly closed nonfinal window must not be recreated after group switches.");
+    assert.ok(finalBrowserEvidence.placeholders.every((tabId) => tabId === null),
+      "Pinned tabs keep the remaining windows usable without extra placeholders: "
+        + JSON.stringify(finalBrowserEvidence.windowDetails));
     const finalLiveWindows = await popup.client.evaluate(
       "chrome.windows.getAll({populate:true,windowTypes:['normal']}).then((windows)=>windows.filter((window)=>!window.incognito).map((window)=>({id:window.id,placeholderIds:(window.tabs??[]).filter((tab)=>tab.url?.includes('/placeholder.html')||tab.pendingUrl?.includes('/placeholder.html')).map((tab)=>tab.id)})))",
     );
-    assert.equal(finalLiveWindows.length, 3);
+    assert.equal(finalLiveWindows.length, 2);
     const openStateWindows = finalState.windows.filter((window) => window.isOpen);
-    assert.equal(openStateWindows.length, 3);
+    assert.equal(openStateWindows.length, 2);
     for (const stateWindow of openStateWindows) {
       const actualWindow = finalLiveWindows.find((window) => window.id === stateWindow.browserWindowId);
-      assert.deepEqual(actualWindow?.placeholderIds, [stateWindow.placeholderTabId],
-        "Each open window should have exactly its one recorded placeholder.");
+      assert.deepEqual(actualWindow?.placeholderIds,
+        Number.isInteger(stateWindow.placeholderTabId) ? [stateWindow.placeholderTabId] : [],
+        "A window's placeholder should match stored state; pinned windows need none.");
     }
     assert.ok(finalBrowserEvidence.pinned >= 3, "Pinned tabs should survive switching and remain excluded.");
 
@@ -1610,14 +1682,19 @@ test("packaged group state survives a browser restart", { timeout: 90000 }, asyn
     return { child, exit, endpoint, endpointUrl, client, extensionId };
   }
 
-  async function closeBrowser(browser) {
+  async function closeBrowser(browser, { abrupt = false } = {}) {
     if (!browser) return;
+    const requestedSignal = abrupt ? "SIGKILL" : "SIGTERM";
     try {
-      process.kill(-browser.child.pid, "SIGTERM");
+      process.kill(-browser.child.pid, requestedSignal);
     } catch {
-      browser.child.kill("SIGTERM");
+      browser.child.kill(requestedSignal);
     }
-    await Promise.race([browser.exit, wait(3000)]);
+    if (abrupt) {
+      await browser.exit;
+    } else {
+      await Promise.race([browser.exit, wait(3000)]);
+    }
     if (browser.child.exitCode === null) {
       try {
         process.kill(-browser.child.pid, "SIGKILL");
@@ -1627,6 +1704,9 @@ test("packaged group state survives a browser restart", { timeout: 90000 }, asyn
       await browser.exit;
     }
     browser.client.close();
+    if (abrupt && browser.child.signalCode !== "SIGKILL") {
+      throw new Error("The disposable browser did not stop with SIGKILL for the crash-like restart check.");
+    }
   }
 
   try {
@@ -1946,7 +2026,8 @@ test("packaged group state survives a browser restart", { timeout: 90000 }, asyn
     popupClient.close();
     popupClient = null;
     await currentBrowser.client.send("Target.closeTarget", { targetId: popupTargetId });
-    await closeBrowser(currentBrowser);
+    await closeBrowser(currentBrowser, { abrupt: true });
+    t.diagnostic("Stopped the disposable browser with SIGKILL to verify crash-like profile recovery.");
     currentBrowser = null;
 
     currentBrowser = await launchBrowser();
@@ -1970,6 +2051,8 @@ test("packaged group state survives a browser restart", { timeout: 90000 }, asyn
     assert.deepEqual(afterRestart.groups.map((group) => group.id).sort(), expectedGroupIdsAfterFinalClose);
     assert.equal(afterRestart.activeGroupId, defaultGroup.id);
     assert.equal(afterRestart.groups.filter((group) => group.name === "Default").length, 1);
+    assert.ok(afterRestart.tabs.some((tab) => tab.id === finalWindowProbeRecord.id),
+      "Crash-like browser termination must preserve the final-window tab snapshot.");
     assert.ok(storedAfterRestart.groups.some((group) => group.id === persistentGroup.id));
     t.diagnostic("Restart test browser: " + currentBrowser.endpoint.version.Browser);
     t.diagnostic("Persisted group: " + persistentGroup.id);

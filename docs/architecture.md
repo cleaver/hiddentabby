@@ -19,12 +19,14 @@
 
 ## Lifecycle Policies
 
-These implementation defaults complete cases the user has not separately specified:
+These lifecycle rules apply across normal browser windows; there is no designated main window:
 
-- Capture tab-removal events before awaiting worker initialization. Apply startup removals using the original persisted tab identities, including events arriving during reconciliation or storage writes. Preserve journaled closes and window-close snapshots; persist manual removals before completing initialization.
-- A user closing one managed tab removes its record but never deletes its HiddenTabby group. If that was the window's last member, the window has no membership in that group and receives the normal ungrouped placeholder. Reconcile native grouping immediately so a remaining singleton is ungrouped. If the parent window closes, keep its tab snapshots as dormant group members so they can be restored in a recreated window when that group is selected.
-- A browser-created New Tab page is ordinary active-group content. If a still-open window has no tabs in the selected group, HiddenTabby creates its own identifiable extension placeholder. The placeholder is ungrouped and excluded from saved group content. Navigating it promotes it into the active group; restoring a real tab into the window removes it.
-- Create a required placeholder before closing the final managed tab in a window. On switch, persist outgoing snapshots and the operation intent before any close; then reconcile planned closes against live tabs in still-open windows so tabs manually closed just before the switch are forgotten. Restore the target group's remaining snapshots to their logical windows, recreating a closed window when needed. Remove placeholders after restored tabs arrive and focus the group's last active tab.
+- Capture tab-removal events before awaiting worker initialization. Apply startup removals using the original persisted tab identities, including events arriving during reconciliation or storage writes. Preserve journaled closes and final-window snapshots; persist manual removals before completing initialization.
+- A user closing one managed tab removes its record but never deletes its HiddenTabby group. If it was the window's last unpinned member, add an ungrouped placeholder only when no pinned tab keeps the window usable. Reconcile native grouping immediately so a remaining singleton is ungrouped.
+- A user's nonfinal normal-window close permanently removes that window's tabs from the active group. Keep inactive-group snapshots that refer to the same logical window, and keep its metadata only while a group snapshot or pending operation still refers to it. Closing the final normal window preserves useful snapshots for restoration after browser restart; closing windows one by one only preserves the final window's content.
+- Pinned tabs stay open during group switching and remain outside groups. A group remembers the logical windows with meaningful unpinned tabs. Keep browser New Tab tabs alongside meaningful tabs in the same group/window; discard New-Tab-only group content. HiddenTabby extension placeholders are never saved. Navigating one promotes it into the active group.
+- On switch, persist outgoing snapshots and intent before any close. Reconcile planned closes against live tabs and pinned state so tabs manually closed or pinned just before the switch are handled correctly. Restore the destination group's tabs to its logical windows, recreating dormant windows when needed, and close unneeded unpinned windows. Remove placeholders after restoration, activate each window's last active tab, and focus a still-useful previously focused window or a destination group window if the source window closed.
+- An empty group retains windows with pinned tabs without adding placeholders. If no pinned window is available, keep or create one temporary window with an excluded placeholder so the browser remains usable.
 - Match restored tabs by extension-owned/session identity first. Use URL/title/index/window context only as a fallback; duplicate URLs must never collapse into one record. When an API or persistence operation fails, retain the snapshot and retry reconciliation on the next browser event/startup.
 - Serialize switch, move, delete, and tab lifecycle changes. If a planned tab is removed before HiddenTabby issues its `tabs.remove()` request, treat it as a user close and remove it from the pending restore records. After the browser close request is issued, retain those snapshots for recovery. Recovery must never revive a deleted group.
 
@@ -36,11 +38,11 @@ These implementation defaults complete cases the user has not separately specifi
 | GROUP-01 | Create/rename/reorder/recolor without implicit activation; one `Default` remains | Unit, popup/manager E2E |
 | GROUP-02 | Native grouping is used for 2+ tabs per group/window; singleton tabs remain logical but ungrouped | Adapter integration, Chromium and Brave E2E |
 | TAB-01 | New/unpinned tabs join active group; pinning removes membership; incognito stays untouched | Unit, browser integration |
-| SWITCH-01 | Global A→B→A closes inactive tabs and restores each tab/window and last active selection | Adapter integration, Chromium and Brave |
-| SWITCH-02 | Empty windows keep one identifiable placeholder; navigation promotes it; restore removes it | Unit, browser integration, restart test |
+| SWITCH-01 | Global A→B→A restores each group's logical windows and last active selection, closing unused unpinned windows | Unit, adapter integration, Chromium and Brave |
+| SWITCH-02 | Pinned windows remain open; empty groups retain pinned windows or one temporary placeholder window | Unit, browser integration, Chromium and Brave |
 | MOVE-01 | Moving to inactive group closes/saves immediately without activating it | Unit, native tab-menu E2E |
 | DELETE-01 | Warning cancellation is inert; confirmation closes tabs, forgets records, and creates empty `Default` as needed | Unit, UI E2E, restart/fault injection |
-| LIFE-01 | Manual tab close removes window membership without deleting the group; window close preserves dormant snapshots; restart reconciles once | Adapter integration, Chromium and Brave E2E |
+| LIFE-01 | Manual tab close forgets that tab; nonfinal window close forgets active-group contents but retains inactive snapshots; final-window close preserves useful snapshots | Unit, adapter integration, Chromium and Brave E2E |
 | PRIV-01 | Local storage only; pinned/incognito exclusion; no remote executable resources | Static/package checks, browser profile inspection |
 | BRAVE-01 | Core behavior matches Chromium; Container controls appear only behind supported APIs | Brave E2E/manual compatibility |
 

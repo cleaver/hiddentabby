@@ -4,8 +4,12 @@ import {
   createGroup,
   deleteGroup as deleteGroupState,
   handleTabRemoved,
+  handleWindowRemoved,
+  isMeaningfulTab,
+  isRememberedTab,
   moveTab,
   planGroupSwitch,
+  pruneUnreferencedWindows,
   promotePlaceholder,
   recolorGroup,
   renameGroup,
@@ -29,6 +33,9 @@ export class WorkspaceController {
   #ready = null;
   #initialized = false;
   #startupTabRemovals = new Map();
+  #startupWindowRemovals = new Set();
+  #startupFinalWindowCloseIds = new Set();
+  #preCloseWindowRemovals = new Map();
   #preCloseTabRemovals = new Map();
   #closeOperationsPreparing = new Set();
   #closeRequestsIssued = new Set();
@@ -97,8 +104,16 @@ export class WorkspaceController {
       makePayload: (state) => {
         const replacementId = crypto.randomUUID();
         const transition = deleteGroupState(state, groupId, { createId: () => replacementId });
+        const layout = groupId === state.activeGroupId
+          ? planGroupSwitch({ ...transition.state, activeGroupId: groupId }, transition.state.activeGroupId, {
+            isPlaceholderUrl: this.#browser.isPlaceholderUrl,
+          })
+          : null;
         const deletedRecords = state.tabs.filter((tab) => tab.groupId === groupId).map(snapshotTab);
         const closeRecords = transition.closeTabs.map(snapshotTab);
+        const recreateWindowRecordIds = (layout?.recreateWindowIds ?? [])
+          .map((browserWindowId) => state.windows.find((window) => window.browserWindowId === browserWindowId)?.id)
+          .filter(Boolean);
         return {
           groupId,
           replacementId,
@@ -106,16 +121,33 @@ export class WorkspaceController {
           destinationGroupId: transition.state.activeGroupId,
           closeRecords,
           closingTabIds: closeRecords.map((tab) => tab.browserTabId),
+          discardRecordIds: layout?.discardTabIds ?? [],
+          closeWindowIds: layout?.closeWindowIds ?? [],
+          recreateWindowRecordIds,
+          placeholderWindowIds: layout?.placeholderWindowIds ?? [],
+          removePlaceholderWindowIds: layout?.removePlaceholderWindowIds ?? [],
+          temporaryWindowId: layout?.createTemporaryWindow ? crypto.randomUUID() : null,
+          windowCloseStartedIds: [],
+          userClosedWindowRecordIds: [],
+          createdWindowRecordIds: [],
+          restoredWindowRecordIds: [],
         };
       },
-      prepare: (state, record) => deleteGroupState(state, groupId, {
-        createId: () => record.payload.replacementId,
-      }).state,
+      prepare: (state, record) => {
+        const transition = deleteGroupState(state, groupId, {
+          createId: () => record.payload.replacementId,
+        });
+        const discarded = new Set(record.payload.discardRecordIds ?? []);
+        return {
+          ...transition.state,
+          tabs: transition.state.tabs.filter((tab) => !discarded.has(tab.id)),
+        };
+      },
       perform: async (pending, state, checkpoint) => ({
         ...(await this.#performGroupSwitch(pending, state, checkpoint)),
         deletedCount: pending.payload.deletedRecords.length,
       }),
-      finalize: (state) => state,
+      finalize: (state, pending) => pruneUnreferencedWindows(state, pending.id),
     });
     this.#cleanupOperationTracking();
     await this.#browser.createMoveMenu(operation.state);
@@ -150,7 +182,7 @@ export class WorkspaceController {
         ? state
         : { ...state, tabs: state.tabs.filter((tab) => tab.id !== pending.payload.recordId) },
       perform: (pending, state, checkpoint) => this.#performDeleteTab(pending, state, checkpoint),
-      finalize: (state) => state,
+      finalize: (state, pending) => pruneUnreferencedWindows(state, pending.id),
     });
     this.#cleanupOperationTracking();
     return operation.state;
@@ -242,7 +274,9 @@ export class WorkspaceController {
       tabs: current.tabs.map((item) => item.id === existing.id
         ? {
           ...item,
-          url: typeof tab.url === "string" ? tab.url : item.url,
+          url: typeof tab.pendingUrl === "string" && tab.pendingUrl
+            ? tab.pendingUrl
+            : typeof tab.url === "string" ? tab.url : item.url,
           title: typeof tab.title === "string" ? tab.title : item.title,
           faviconUrl: typeof tab.favIconUrl === "string" ? tab.favIconUrl : item.faviconUrl,
           index: Number.isInteger(tab.index) ? tab.index : item.index,
@@ -289,7 +323,12 @@ export class WorkspaceController {
     }
 
     const removedTab = state.tabs.find((tab) => tab.browserTabId === tabId);
-    const updated = await this.#store.update((current) => handleTabRemoved(current, tabId, removeInfo));
+    const preserveWindowSnapshots = removeInfo.isWindowClosing
+      && await this.#isFinalNormalWindowClose(removeInfo.windowId);
+    const effectiveRemoveInfo = removeInfo.isWindowClosing
+      ? { ...removeInfo, isWindowClosing: preserveWindowSnapshots }
+      : removeInfo;
+    const updated = await this.#store.update((current) => handleTabRemoved(current, tabId, effectiveRemoveInfo));
     if (!removeInfo.isWindowClosing) {
       if (removedTab) {
         await this.#browser.groupManagedTabs(updated, removedTab.groupId, removeInfo.windowId);
@@ -301,16 +340,25 @@ export class WorkspaceController {
   }
 
   async onWindowRemoved(browserWindowId) {
+    const duringStartup = !this.#initialized;
+    if (duringStartup) this.#startupWindowRemovals.add(browserWindowId);
+    else {
+      const pendingSwitch = this.#store.snapshot().operations.find((operation) =>
+        operation.type === "switch-group"
+        && !operation.payload.windowCloseStartedIds?.includes(browserWindowId));
+      if (pendingSwitch) {
+        const preserveTabs = await this.#isFinalNormalWindowClose(browserWindowId);
+        this.#preCloseWindowRemovals.set(browserWindowId, { preserveTabs });
+      }
+    }
     await this.initialize();
-    return this.#store.update((current) => ({
-      ...current,
-      tabs: current.tabs.map((tab) => tab.browserWindowId === browserWindowId
-        ? { ...tab, browserTabId: null, sessionId: null, status: "closed" }
-        : tab),
-      windows: current.windows.map((window) => window.browserWindowId === browserWindowId
-        ? { ...window, isOpen: false, placeholderTabId: null, pinnedTabIds: [] }
-        : window),
-    }));
+    if (duringStartup) return this.#store.snapshot();
+    const state = this.#store.snapshot();
+    const expected = state.operations.some((operation) =>
+      operation.payload.windowCloseStartedIds?.includes(browserWindowId));
+    if (expected || this.#preCloseWindowRemovals.has(browserWindowId)) return state;
+    const preserveTabs = await this.#isFinalNormalWindowClose(browserWindowId);
+    return this.#store.update((current) => handleWindowRemoved(current, browserWindowId, { preserveTabs }));
   }
 
   async onTabAttached(tabId, attachInfo) {
@@ -358,23 +406,44 @@ export class WorkspaceController {
     if (this.#store.snapshot().operations.length) {
       await this.#store.resumePending(this.#recoveryHandlers());
     }
+    const lastFocusedWindow = await this.#browser.getLastFocusedWindow().catch(() => null);
+    const requestedFocusedBrowserWindowId = lastFocusedWindow?.id ?? null;
     const operation = await this.#store.runJournaled({
       id: `switch-${crypto.randomUUID()}`,
       type: "switch-group",
       makePayload: (state) => {
-        const transition = planGroupSwitch(state, destinationGroupId);
+        const transition = planGroupSwitch(state, destinationGroupId, {
+          isPlaceholderUrl: this.#browser.isPlaceholderUrl,
+        });
         const closeRecords = transition.closeTabs.map(snapshotTab);
-        const needsRestore = state.tabs.some((tab) => tab.groupId === destinationGroupId && tab.status === "closed");
+        const recreateWindowRecordIds = transition.recreateWindowIds
+          .map((browserWindowId) => state.windows.find((window) => window.browserWindowId === browserWindowId)?.id)
+          .filter(Boolean);
+        const needsRestore = transition.restoreTabs.length > 0;
         return {
           destinationGroupId,
+          requestedFocusedBrowserWindowId,
           closeRecords,
           closingTabIds: closeRecords.map((tab) => tab.browserTabId),
-          noop: destinationGroupId === state.activeGroupId && !needsRestore,
+          discardRecordIds: transition.discardTabIds,
+          closeWindowIds: transition.closeWindowIds,
+          recreateWindowRecordIds,
+          placeholderWindowIds: transition.placeholderWindowIds,
+          removePlaceholderWindowIds: transition.removePlaceholderWindowIds,
+          temporaryWindowId: transition.createTemporaryWindow ? crypto.randomUUID() : null,
+          windowCloseStartedIds: [],
+          userClosedWindowRecordIds: [],
+          createdWindowRecordIds: [],
+          restoredWindowRecordIds: [],
+          noop: destinationGroupId === state.activeGroupId && !needsRestore
+            && transition.discardTabIds.length === 0,
         };
       },
       prepare: (state, record) => {
         if (record.payload.noop) return state;
-        const transition = planGroupSwitch(state, destinationGroupId);
+        const transition = planGroupSwitch(state, destinationGroupId, {
+          isPlaceholderUrl: this.#browser.isPlaceholderUrl,
+        });
         const closeRecordIds = new Set(record.payload.closeRecords.map((tab) => tab.id));
         return {
           ...transition.state,
@@ -384,7 +453,7 @@ export class WorkspaceController {
         };
       },
       perform: (record, state, checkpoint) => this.#performGroupSwitch(record, state, checkpoint),
-      finalize: (state) => state,
+      finalize: (state, record) => pruneUnreferencedWindows(state, record.id),
     });
 
     this.#cleanupOperationTracking();
@@ -436,7 +505,7 @@ export class WorkspaceController {
         ? current
         : moveTab(current, record.id, destinationGroupId).state,
       perform: (pending, pendingState, checkpoint) => this.#performMoveOperation(pending, pendingState, checkpoint),
-      finalize: (current) => current,
+      finalize: (current, pending) => pruneUnreferencedWindows(current, pending.id),
     });
     this.#cleanupOperationTracking();
     return operation.state;
@@ -446,17 +515,19 @@ export class WorkspaceController {
     const initial = await this.#store.load();
     let state = await this.#reconcile(initial);
     let processedRemovals = 0;
+    await this.#refreshStartupWindowClosePolicy();
     await this.#store.update(() => {
-      processedRemovals = this.#startupTabRemovals.size;
+      processedRemovals = this.#startupRemovalCount();
       return this.#applyStartupTabRemovals(state, initial);
     });
     if (state.operations.length) await this.#store.resumePending(this.#recoveryHandlers());
     let adoptInitialTabs = this.#store.didCreateInitialState;
     do {
       // Keep original IDs until all startup API calls and removal writes finish.
-      while (this.#startupTabRemovals.size > processedRemovals) {
+      while (this.#startupRemovalCount() > processedRemovals) {
+        await this.#refreshStartupWindowClosePolicy();
         await this.#store.update((current) => {
-          processedRemovals = this.#startupTabRemovals.size;
+          processedRemovals = this.#startupRemovalCount();
           return this.#applyStartupTabRemovals(current, initial);
         });
       }
@@ -465,8 +536,9 @@ export class WorkspaceController {
       else await this.#browser.updateNativeGroups(state);
       adoptInitialTabs = false;
       await this.#browser.createMoveMenu(state);
-    } while (this.#startupTabRemovals.size > processedRemovals);
+    } while (this.#startupRemovalCount() > processedRemovals);
     this.#startupTabRemovals.clear();
+    this.#startupWindowRemovals.clear();
     this.#initialized = true;
     return state;
   }
@@ -477,33 +549,127 @@ export class WorkspaceController {
         || state.operations.some((operation) => operationClosesTab(operation, state, tabId));
       if (!expected) {
         const original = initial.tabs.find((tab) => tab.browserTabId === tabId);
-        state = handleTabRemoved(state, tabId, removeInfo);
-        if (!removeInfo.isWindowClosing && original) {
+        const isFinalWindowClose = removeInfo.isWindowClosing
+          && this.#startupFinalWindowCloseIds.has(removeInfo.windowId);
+        state = handleTabRemoved(state, tabId, {
+          ...removeInfo,
+          isWindowClosing: isFinalWindowClose,
+        });
+        if (!isFinalWindowClose && original) {
           // Reconciliation may already have cleared the transient browser ID.
           state = { ...state, tabs: state.tabs.filter((tab) => tab.id !== original.id) };
         }
       }
     }
+    for (const browserWindowId of this.#startupWindowRemovals) {
+      const preserveTabs = this.#startupFinalWindowCloseIds.has(browserWindowId);
+      const expected = initial.operations.some((operation) =>
+        operation.payload.windowCloseStartedIds?.includes(browserWindowId))
+        || state.operations.some((operation) => operation.payload.windowCloseStartedIds?.includes(browserWindowId));
+      if (expected) continue;
+      const pendingSwitch = state.operations.find((operation) => operation.type === "switch-group");
+      if (pendingSwitch && preserveTabs) {
+        const closed = handleWindowRemoved(state, browserWindowId, { preserveTabs: true });
+        state = {
+          ...closed,
+          operations: closed.operations.map((operation) => operation.id === pendingSwitch.id
+            ? { ...operation, payload: { ...operation.payload, finalWindowClosed: true } }
+            : operation),
+        };
+      } else if (pendingSwitch) {
+        const logicalWindow = state.windows.find((window) => window.browserWindowId === browserWindowId);
+        const restoredWindowRecordIds = new Set(pendingSwitch.payload.restoredWindowRecordIds ?? []);
+        const destinationWasRestored = logicalWindow && restoredWindowRecordIds.has(logicalWindow.id);
+        const forgottenRecordIds = new Set(destinationWasRestored
+          ? []
+          : (pendingSwitch.payload.closeRecords ?? [])
+            .filter((record) => record.browserWindowId === browserWindowId)
+            .map((record) => record.id));
+        const forgottenBrowserTabIds = new Set((pendingSwitch.payload.closeRecords ?? [])
+          .filter((record) => forgottenRecordIds.has(record.id))
+          .map((record) => record.browserTabId));
+        for (const tab of state.tabs) {
+          const closedDuringRestore = tab.groupId === state.activeGroupId
+            && ((logicalWindow && tab.windowId === logicalWindow.id
+              && restoredWindowRecordIds.has(logicalWindow.id))
+              || tab.browserWindowId === browserWindowId && tab.status === "open");
+          if (closedDuringRestore) {
+            forgottenRecordIds.add(tab.id);
+            forgottenBrowserTabIds.add(tab.browserTabId);
+          }
+        }
+        state = {
+          ...state,
+          tabs: state.tabs.filter((tab) => !forgottenRecordIds.has(tab.id)),
+          windows: state.windows.map((window) => window.browserWindowId === browserWindowId
+            ? { ...window, isOpen: false, placeholderTabId: null, pinnedTabIds: [] }
+            : window),
+          operations: state.operations.map((operation) => operation.id === pendingSwitch.id
+            ? {
+              ...operation,
+              payload: {
+                ...operation.payload,
+                closeRecords: (operation.payload.closeRecords ?? [])
+                  .filter((record) => !forgottenRecordIds.has(record.id)),
+                closingTabIds: (operation.payload.closingTabIds ?? [])
+                  .filter((tabId) => !forgottenBrowserTabIds.has(tabId)),
+                closeWindowIds: (operation.payload.closeWindowIds ?? [])
+                  .filter((windowId) => windowId !== browserWindowId),
+                discardRecordIds: (operation.payload.discardRecordIds ?? [])
+                  .filter((recordId) => !forgottenRecordIds.has(recordId)),
+                userClosedWindowRecordIds: [...new Set([
+                  ...(operation.payload.userClosedWindowRecordIds ?? []),
+                  ...(logicalWindow ? [logicalWindow.id] : []),
+                ])],
+              },
+            }
+            : operation),
+        };
+      } else {
+        state = handleWindowRemoved(state, browserWindowId, { preserveTabs });
+      }
+    }
     return state;
+  }
+
+  #startupRemovalCount() {
+    return this.#startupTabRemovals.size + this.#startupWindowRemovals.size;
+  }
+
+  async #refreshStartupWindowClosePolicy() {
+    const liveWindows = await this.#browser.getNormalWindows();
+    this.#startupFinalWindowCloseIds = new Set(
+      [...this.#startupTabRemovals]
+        .filter(([, removeInfo]) => removeInfo.isWindowClosing
+          && !liveWindows.some((window) => window.id !== removeInfo.windowId))
+        .map(([, removeInfo]) => removeInfo.windowId)
+        .concat([...this.#startupWindowRemovals]
+          .filter((windowId) => !liveWindows.some((window) => window.id !== windowId))),
+    );
+  }
+
+  async #isFinalNormalWindowClose(browserWindowId) {
+    const liveWindows = await this.#browser.getNormalWindows();
+    return !liveWindows.some((window) => window.id !== browserWindowId);
   }
 
   #recoveryHandlers() {
     return {
       "switch-group": {
         perform: (operation, state, checkpoint) => this.#performGroupSwitch(operation, state, checkpoint),
-        finalize: (state) => state,
+        finalize: (state, operation) => pruneUnreferencedWindows(state, operation.id),
       },
       "move-tab": {
         perform: (operation, state, checkpoint) => this.#performMoveOperation(operation, state, checkpoint),
-        finalize: (state) => state,
+        finalize: (state, operation) => pruneUnreferencedWindows(state, operation.id),
       },
       "delete-group": {
         perform: (operation, state, checkpoint) => this.#performGroupSwitch(operation, state, checkpoint),
-        finalize: (state) => state,
+        finalize: (state, operation) => pruneUnreferencedWindows(state, operation.id),
       },
       "delete-tab": {
         perform: (operation, state, checkpoint) => this.#performDeleteTab(operation, state, checkpoint),
-        finalize: (state) => state,
+        finalize: (state, operation) => pruneUnreferencedWindows(state, operation.id),
       },
     };
   }
@@ -518,7 +684,13 @@ export class WorkspaceController {
     const logicalWindow = state.windows.find((window) => window.id === closeRecord.windowId);
     const activeTabsRemain = initialState.tabs.some((tab) => tab.groupId === initialState.activeGroupId
       && tab.windowId === closeRecord.windowId && tab.status === "open");
-    if (logicalWindow?.isOpen && logicalWindow.placeholderTabId === null && !activeTabsRemain) {
+    const liveWindow = logicalWindow?.isOpen
+      ? (await this.#browser.getNormalWindows()).find((window) => window.id === logicalWindow.browserWindowId)
+      : null;
+    const hasPinnedTabs = (logicalWindow?.pinnedTabIds ?? []).length > 0
+      || (liveWindow?.tabs ?? []).some((tab) => tab.pinned && !tab.incognito);
+    if (logicalWindow?.isOpen && logicalWindow.placeholderTabId === null
+      && !activeTabsRemain && !hasPinnedTabs) {
       const placeholder = await this.#browser.createPlaceholder(logicalWindow.browserWindowId, logicalWindow.id);
       await checkpoint((state) => setWindowPlaceholder(state, logicalWindow.browserWindowId, placeholder.id));
     }
@@ -674,7 +846,13 @@ export class WorkspaceController {
     const logicalWindow = state.windows.find((window) => window.id === deletedRecord.windowId);
     const activeTabsRemain = state.tabs.some((tab) => tab.groupId === state.activeGroupId
       && tab.windowId === deletedRecord.windowId && tab.status === "open");
-    if (logicalWindow?.isOpen && logicalWindow.placeholderTabId === null && !activeTabsRemain) {
+    const liveWindow = logicalWindow?.isOpen
+      ? (await this.#browser.getNormalWindows()).find((window) => window.id === logicalWindow.browserWindowId)
+      : null;
+    const hasPinnedTabs = (logicalWindow?.pinnedTabIds ?? []).length > 0
+      || (liveWindow?.tabs ?? []).some((tab) => tab.pinned && !tab.incognito);
+    if (logicalWindow?.isOpen && logicalWindow.placeholderTabId === null
+      && !activeTabsRemain && !hasPinnedTabs) {
       try {
         const placeholder = await this.#browser.createPlaceholder(
           logicalWindow.browserWindowId,
@@ -733,16 +911,62 @@ export class WorkspaceController {
 
   async #performGroupSwitch(operation, initialState, checkpoint) {
     if (operation.payload.noop) return { failures: [], restoredCount: 0 };
+    if (operation.payload.finalWindowClosed) return { failures: [], restoredCount: 0 };
     if (!operation.payload.closeStarted) this.#closeOperationsPreparing.add(operation.id);
     const destinationGroupId = operation.payload.destinationGroupId;
     let closeRecords = operation.payload.closeRecords ?? [];
     let state = initialState;
     const failures = [];
+    const closeWindowIds = new Set(operation.payload.closeWindowIds ?? []);
+    const placeholderWindowIds = new Set(operation.payload.placeholderWindowIds ?? []);
+    const suppressedWindowRecordIds = new Set(operation.payload.userClosedWindowRecordIds ?? []);
     const liveWindows = await this.#browser.getNormalWindows();
     const liveWindowIds = new Set(liveWindows.map((window) => window.id));
     const liveTabIds = new Set(liveWindows.flatMap((window) => window.tabs ?? []).map((tab) => tab.id));
     let closingTabIds = new Set((operation.payload.closingTabIds ?? [])
       .filter((tabId) => operation.payload.closeStarted || liveTabIds.has(tabId)));
+    const liveTabsById = new Map(liveWindows.flatMap((window) => window.tabs ?? []).map((tab) => [tab.id, tab]));
+    const discardRecordIds = new Set(operation.payload.discardRecordIds ?? []);
+    let refreshedDiscardedRecords = false;
+    closeRecords = closeRecords.map((record) => {
+      const liveTab = liveTabsById.get(record.browserTabId);
+      if (!liveTab || isMeaningfulTab(record, this.#browser.isPlaceholderUrl)
+        || !isMeaningfulTab(liveTab, this.#browser.isPlaceholderUrl)) return record;
+      discardRecordIds.delete(record.id);
+      refreshedDiscardedRecords = true;
+      return {
+        ...record,
+        url: liveTab.pendingUrl || liveTab.url || record.url,
+        title: liveTab.title || record.title,
+        index: Number.isInteger(liveTab.index) ? liveTab.index : record.index,
+      };
+    });
+    if (refreshedDiscardedRecords) {
+      const snapshots = new Map(closeRecords.filter((record) => !discardRecordIds.has(record.id))
+        .map((record) => [record.id, record]));
+      state = await checkpoint((current) => ({
+        ...current,
+        tabs: [
+          ...current.tabs.filter((tab) => !snapshots.has(tab.id)),
+          ...[...snapshots.values()].map((record) => ({
+            ...(current.tabs.find((tab) => tab.id === record.id) ?? record),
+            browserTabId: null,
+            sessionId: null,
+            status: "closed",
+          })),
+        ],
+        operations: current.operations.map((pending) => pending.id === operation.id
+          ? {
+            ...pending,
+            payload: {
+              ...pending.payload,
+              closeRecords,
+              discardRecordIds: [...discardRecordIds],
+            },
+          }
+          : pending),
+      }));
+    }
     let reconciliation = await this.#reconcilePlannedCloses(
       operation,
       state,
@@ -764,14 +988,22 @@ export class WorkspaceController {
     }
 
     for (const window of state.windows.filter((item) => item.isOpen)) {
+      if (closeWindowIds.has(window.browserWindowId)) continue;
       const liveWindow = liveWindows.find((item) => item.id === window.browserWindowId);
-      const hasDestinationRecords = state.tabs.some((tab) => tab.groupId === destinationGroupId && tab.windowId === window.id);
+      const hasDestinationRecords = state.tabs.some((tab) => tab.groupId === destinationGroupId
+        && tab.windowId === window.id && isMeaningfulTab(tab, this.#browser.isPlaceholderUrl));
+      const livePinnedTabIds = (liveWindow?.tabs ?? [])
+        .filter((tab) => tab.pinned && !tab.incognito)
+        .map((tab) => tab.id);
+      const hasPinnedTabs = (window.pinnedTabIds ?? []).length > 0 || livePinnedTabIds.length > 0;
       const remainingTabs = (liveWindow?.tabs ?? []).filter((tab) => !tab.incognito
         && !tab.pinned && !closingTabIds.has(tab.id)
         && !isPlaceholderTab(this.#browser, tab));
       const willCloseWindow = liveWindow && remainingTabs.length === 0
         && closeRecords.some((tab) => tab.browserWindowId === window.browserWindowId);
-      if ((!hasDestinationRecords || willCloseWindow) && window.placeholderTabId === null) {
+      const needsContinuityPlaceholder = placeholderWindowIds.has(window.browserWindowId);
+      if (!hasPinnedTabs && (willCloseWindow || needsContinuityPlaceholder)
+        && window.placeholderTabId === null) {
         try {
           const placeholder = await this.#browser.createPlaceholder(window.browserWindowId, window.id);
           state = await checkpoint((current) => setWindowPlaceholder(
@@ -786,27 +1018,98 @@ export class WorkspaceController {
     }
 
     const dormantWindows = state.windows.filter((window) => !window.isOpen
-      && state.tabs.some((tab) => tab.groupId === destinationGroupId && tab.windowId === window.id));
+      && state.tabs.some((tab) => tab.groupId === destinationGroupId && tab.windowId === window.id
+        && isRememberedTab(state, tab, this.#browser.isPlaceholderUrl))
+      && !suppressedWindowRecordIds.has(window.id)
+      && (!operation.payload.recreateWindowRecordIds?.length
+        || operation.payload.recreateWindowRecordIds.includes(window.id)));
     for (const dormant of dormantWindows) {
+      let created;
       try {
-        const created = await this.#browser.createWindowWithPlaceholder(dormant.id);
-        state = await checkpoint((current) => ({
-          ...current,
-          windows: current.windows.map((window) => window.id === dormant.id
-            ? {
-              ...window,
-              browserWindowId: created.windowId,
-              isOpen: true,
-              placeholderTabId: created.placeholderTabId,
-              pinnedTabIds: [],
-            }
-            : window),
-          tabs: current.tabs.map((tab) => tab.windowId === dormant.id
-            ? { ...tab, browserWindowId: created.windowId }
-            : tab),
-        }));
+        created = await this.#browser.createWindowWithPlaceholder(dormant.id);
       } catch (error) {
         failures.push(`Could not recreate window for ${dormant.id}: ${error.message}`);
+        continue;
+      }
+      // A browser window may now exist, so a failed checkpoint must leave the
+      // operation journal intact for startup reconciliation to recover it.
+      state = await checkpoint((current) => ({
+        ...current,
+        windows: current.windows.map((window) => window.id === dormant.id
+          ? {
+            ...window,
+            browserWindowId: created.windowId,
+            isOpen: true,
+            placeholderTabId: created.placeholderTabId,
+            pinnedTabIds: [],
+          }
+          : window),
+        tabs: current.tabs.map((tab) => tab.windowId === dormant.id
+          ? { ...tab, browserWindowId: created.windowId }
+          : tab),
+        operations: current.operations.map((pending) => pending.id === operation.id
+          ? {
+            ...pending,
+            payload: {
+              ...pending.payload,
+              createdWindowRecordIds: [...new Set([
+                ...(pending.payload.createdWindowRecordIds ?? []),
+                dormant.id,
+              ])],
+            },
+          }
+          : pending),
+      }));
+    }
+
+    const temporaryWindowId = operation.payload.temporaryWindowId;
+    if (temporaryWindowId && !state.windows.some((window) => window.id === temporaryWindowId && window.isOpen)) {
+      const currentWindows = await this.#browser.getNormalWindows();
+      const existing = currentWindows.find((window) => (window.tabs ?? []).some((tab) =>
+        placeholderWindowKey(this.#browser, tab) === temporaryWindowId));
+      if (existing) {
+        const placeholder = existing.tabs.find((tab) => isPlaceholderTab(this.#browser, tab));
+        state = await checkpoint((current) => ({
+          ...current,
+          windows: [
+            ...current.windows.filter((window) => window.id !== temporaryWindowId),
+            {
+              id: temporaryWindowId,
+              browserWindowId: existing.id,
+              isOpen: true,
+              placeholderTabId: placeholder?.id ?? null,
+              pinnedTabIds: (existing.tabs ?? []).filter((tab) => tab.pinned).map((tab) => tab.id),
+            },
+          ],
+        }));
+      } else {
+        state = await checkpoint((current) => ({
+          ...current,
+          operations: current.operations.map((pending) => pending.id === operation.id
+            ? { ...pending, payload: { ...pending.payload, temporaryWindowStarted: true } }
+            : pending),
+        }));
+        try {
+          const created = await this.#browser.createWindowWithPlaceholder(temporaryWindowId);
+          state = await checkpoint((current) => ({
+            ...current,
+            windows: [
+              ...current.windows.filter((window) => window.id !== temporaryWindowId),
+              {
+                id: temporaryWindowId,
+                browserWindowId: created.windowId,
+                isOpen: true,
+                placeholderTabId: created.placeholderTabId,
+                pinnedTabIds: [],
+              },
+            ],
+            operations: current.operations.map((pending) => pending.id === operation.id
+              ? { ...pending, payload: { ...pending.payload, temporaryWindowCreated: true } }
+              : pending),
+          }));
+        } catch (error) {
+          throw new Error(`Could not create a temporary browser window: ${error.message}`, { cause: error });
+        }
       }
     }
 
@@ -860,11 +1163,217 @@ export class WorkspaceController {
       }));
     }
 
+    const userWindowRemoval = await this.#consumePreCloseWindowRemovals(
+      operation,
+      state,
+      closeRecords,
+      closingTabIds,
+      closeWindowIds,
+      suppressedWindowRecordIds,
+      checkpoint,
+    );
+    state = userWindowRemoval.state;
+    closeRecords = userWindowRemoval.closeRecords;
+    closingTabIds = userWindowRemoval.closingTabIds;
+    if (userWindowRemoval.finalWindowClosed) return { failures: [], restoredCount: 0 };
+
+    const windowCloseStartedIds = new Set(operation.payload.windowCloseStartedIds ?? []);
+    for (const browserWindowId of [...closeWindowIds]) {
+      const currentWindows = await this.#browser.getNormalWindows();
+      const liveWindow = currentWindows.find((window) => window.id === browserWindowId);
+      const logicalWindow = state.windows.find((window) => window.browserWindowId === browserWindowId);
+      if (!liveWindow) {
+        const unexpectedClose = !windowCloseStartedIds.has(browserWindowId);
+        if (unexpectedClose) {
+          const forgottenRecordIds = new Set(closeRecords
+            .filter((record) => record.browserWindowId === browserWindowId)
+            .map((record) => record.id));
+          closeRecords = closeRecords.filter((record) => !forgottenRecordIds.has(record.id));
+          closingTabIds = new Set([...closingTabIds].filter((tabId) =>
+            !operation.payload.closeRecords?.some((record) => forgottenRecordIds.has(record.id)
+              && record.browserTabId === tabId)));
+          closeWindowIds.delete(browserWindowId);
+          this.#preCloseWindowRemovals.delete(browserWindowId);
+          if (logicalWindow) suppressedWindowRecordIds.add(logicalWindow.id);
+          state = await checkpoint((current) => ({
+            ...current,
+            tabs: current.tabs.filter((tab) => !forgottenRecordIds.has(tab.id)),
+            windows: current.windows.map((window) => window.browserWindowId === browserWindowId
+              ? { ...window, isOpen: false, placeholderTabId: null, pinnedTabIds: [] }
+              : window),
+            operations: current.operations.map((pending) => pending.id === operation.id
+              ? {
+                ...pending,
+                payload: {
+                  ...pending.payload,
+                  closeRecords,
+                  closingTabIds: [...closingTabIds],
+                  closeWindowIds: [...closeWindowIds],
+                  userClosedWindowRecordIds: [...suppressedWindowRecordIds],
+                },
+              }
+              : pending),
+          }));
+        } else if (logicalWindow?.isOpen) {
+          state = await checkpoint((current) => ({
+            ...current,
+            windows: current.windows.map((window) => window.id === logicalWindow.id
+              ? { ...window, isOpen: false, placeholderTabId: null, pinnedTabIds: [] }
+              : window),
+          }));
+        }
+        continue;
+      }
+
+      const pinnedTabs = (liveWindow.tabs ?? []).filter((tab) => tab.pinned && !tab.incognito);
+      const unexpectedTabs = (liveWindow.tabs ?? []).filter((tab) => !tab.pinned && !tab.incognito
+        && !isPlaceholderTab(this.#browser, tab)
+        && !closingTabIds.has(tab.id)
+        && !state.tabs.some((record) => record.status === "open" && record.browserTabId === tab.id)
+        && isMeaningfulTab(tab, this.#browser.isPlaceholderUrl));
+      if (pinnedTabs.length || unexpectedTabs.length) {
+        const nowPinnedIds = new Set(pinnedTabs.map((tab) => tab.id));
+        const forgottenRecordIds = new Set(closeRecords
+          .filter((record) => nowPinnedIds.has(record.browserTabId))
+          .map((record) => record.id));
+        closeRecords = closeRecords.filter((record) => !forgottenRecordIds.has(record.id));
+        closingTabIds = new Set([...closingTabIds].filter((tabId) => !nowPinnedIds.has(tabId)));
+        closeWindowIds.delete(browserWindowId);
+        state = await checkpoint((current) => {
+          let next = {
+            ...current,
+            tabs: current.tabs.filter((tab) => !forgottenRecordIds.has(tab.id)),
+            windows: current.windows.map((window) => window.browserWindowId === browserWindowId
+              ? { ...window, pinnedTabIds: pinnedTabs.map((tab) => tab.id) }
+              : window),
+          };
+          for (const tab of pinnedTabs) {
+            next = assignTab(next, {
+              ...tab,
+              windowId: browserWindowId,
+              windowKey: logicalWindow?.id,
+            }, next.activeGroupId);
+          }
+          for (const tab of unexpectedTabs) {
+            next = assignTab(next, {
+              ...tab,
+              windowId: browserWindowId,
+              windowKey: logicalWindow?.id,
+            }, next.activeGroupId);
+          }
+          return {
+            ...next,
+            operations: next.operations.map((pending) => pending.id === operation.id
+              ? {
+                ...pending,
+                payload: {
+                  ...pending.payload,
+                  closeRecords,
+                  closingTabIds: [...closingTabIds],
+                  closeWindowIds: [...closeWindowIds],
+                },
+              }
+              : pending),
+          };
+        });
+        continue;
+      }
+
+      if (currentWindows.length <= 1) {
+        closeWindowIds.delete(browserWindowId);
+        const hasDestinationRecords = logicalWindow && state.tabs.some((tab) =>
+          tab.groupId === destinationGroupId && tab.windowId === logicalWindow.id
+          && isMeaningfulTab(tab, this.#browser.isPlaceholderUrl));
+        let placeholder = liveWindow.tabs?.find((tab) => isPlaceholderTab(this.#browser, tab)) ?? null;
+        if (!hasDestinationRecords && logicalWindow && !pinnedTabs.length && !placeholder) {
+          try {
+            placeholder = await this.#browser.createPlaceholder(browserWindowId, logicalWindow.id);
+          } catch (error) {
+            throw new Error(`Could not keep a temporary window open: ${error.message}`, { cause: error });
+          }
+        }
+        if (placeholder) placeholderWindowIds.add(browserWindowId);
+        state = await checkpoint((current) => ({
+          ...current,
+          windows: placeholder && logicalWindow
+            ? current.windows.map((window) => window.id === logicalWindow.id
+              ? { ...window, placeholderTabId: placeholder.id }
+              : window)
+            : current.windows,
+          operations: current.operations.map((pending) => pending.id === operation.id
+            ? {
+              ...pending,
+              payload: {
+                ...pending.payload,
+                closeWindowIds: [...closeWindowIds],
+                placeholderWindowIds: [...placeholderWindowIds],
+              },
+            }
+            : pending),
+        }));
+        continue;
+      }
+
+      if (!windowCloseStartedIds.has(browserWindowId)) {
+        windowCloseStartedIds.add(browserWindowId);
+        state = await checkpoint((current) => ({
+          ...current,
+          operations: current.operations.map((pending) => pending.id === operation.id
+            ? {
+              ...pending,
+              payload: { ...pending.payload, windowCloseStartedIds: [...windowCloseStartedIds] },
+            }
+            : pending),
+        }));
+      }
+      try {
+        await this.#browser.removeWindow(browserWindowId);
+      } catch (error) {
+        throw new Error(`Could not close unused window ${browserWindowId}: ${error.message}`, { cause: error });
+      }
+      state = await checkpoint((current) => ({
+        ...current,
+        windows: current.windows.map((window) => window.browserWindowId === browserWindowId
+          ? { ...window, isOpen: false, placeholderTabId: null, pinnedTabIds: [] }
+          : window),
+      }));
+    }
+
+    const lateUserWindowRemoval = await this.#consumePreCloseWindowRemovals(
+      operation,
+      state,
+      closeRecords,
+      closingTabIds,
+      closeWindowIds,
+      suppressedWindowRecordIds,
+      checkpoint,
+    );
+    state = lateUserWindowRemoval.state;
+    closeRecords = lateUserWindowRemoval.closeRecords;
+    closingTabIds = lateUserWindowRemoval.closingTabIds;
+    if (lateUserWindowRemoval.finalWindowClosed) return { failures: [], restoredCount: 0 };
+
     const restoredTabIds = new Set();
     const destinationRecords = state.tabs
-      .filter((tab) => tab.groupId === destinationGroupId && tab.status === "closed")
+      .filter((tab) => tab.groupId === destinationGroupId && tab.status === "closed"
+        && isRememberedTab(state, tab, this.#browser.isPlaceholderUrl)
+        && !suppressedWindowRecordIds.has(tab.windowId))
       .sort((a, b) => a.windowId.localeCompare(b.windowId) || a.index - b.index);
     for (const record of destinationRecords) {
+      const pendingWindowRemoval = await this.#consumePreCloseWindowRemovals(
+        operation,
+        state,
+        closeRecords,
+        closingTabIds,
+        closeWindowIds,
+        suppressedWindowRecordIds,
+        checkpoint,
+      );
+      state = pendingWindowRemoval.state;
+      closeRecords = pendingWindowRemoval.closeRecords;
+      closingTabIds = pendingWindowRemoval.closingTabIds;
+      if (pendingWindowRemoval.finalWindowClosed) return { failures: [], restoredCount: 0 };
+      if (suppressedWindowRecordIds.has(record.windowId)) continue;
       let window = state.windows.find((candidate) => candidate.id === record.windowId);
       if (!window?.isOpen) {
         failures.push(`No open window is available for “${record.title || record.url}”.`);
@@ -910,17 +1419,63 @@ export class WorkspaceController {
               status: "open",
             }
             : tab),
+          operations: current.operations.map((pending) => pending.id === operation.id
+            ? {
+              ...pending,
+              payload: {
+                ...pending.payload,
+                restoredWindowRecordIds: [...new Set([
+                  ...(pending.payload.restoredWindowRecordIds ?? []),
+                  record.windowId,
+                ])],
+              },
+            }
+            : pending),
         }));
       } catch (error) {
         failures.push(`Could not restore “${record.title || record.url}”: ${error.message}`);
       }
     }
 
+    const finalWindowRemoval = await this.#consumePreCloseWindowRemovals(
+      operation,
+      state,
+      closeRecords,
+      closingTabIds,
+      closeWindowIds,
+      suppressedWindowRecordIds,
+      checkpoint,
+    );
+    state = finalWindowRemoval.state;
+    closeRecords = finalWindowRemoval.closeRecords;
+    closingTabIds = finalWindowRemoval.closingTabIds;
+    if (finalWindowRemoval.finalWindowClosed) return { failures: [], restoredCount: 0 };
+
     state = this.#store.snapshot();
+    const finalLiveWindows = await this.#browser.getNormalWindows();
     for (const window of state.windows.filter((item) => item.isOpen)) {
+      const liveWindow = finalLiveWindows.find((candidate) => candidate.id === window.browserWindowId);
+      const livePinnedTabIds = (liveWindow?.tabs ?? [])
+        .filter((tab) => tab.pinned && !tab.incognito)
+        .map((tab) => tab.id);
       const groupTabs = state.tabs.filter((tab) => tab.groupId === destinationGroupId
-        && tab.windowId === window.id && tab.status === "open");
-      if (!groupTabs.length && window.placeholderTabId === null) {
+        && tab.windowId === window.id && tab.status === "open"
+        && isMeaningfulTab(tab, this.#browser.isPlaceholderUrl));
+      const hasPinnedTabs = (window.pinnedTabIds ?? []).length > 0 || livePinnedTabIds.length > 0;
+      if (livePinnedTabIds.length && livePinnedTabIds.some((tabId) => !window.pinnedTabIds.includes(tabId))) {
+        state = await checkpoint((current) => ({
+          ...current,
+          windows: current.windows.map((candidate) => candidate.id === window.id
+            ? { ...candidate, pinnedTabIds: [...new Set([...candidate.pinnedTabIds, ...livePinnedTabIds])] }
+            : candidate),
+        }));
+      }
+      const hasDestinationSnapshots = state.tabs.some((tab) => tab.groupId === destinationGroupId
+        && tab.windowId === window.id && isMeaningfulTab(tab, this.#browser.isPlaceholderUrl));
+      const needsTemporaryPlaceholder = window.id === temporaryWindowId
+        || placeholderWindowIds.has(window.browserWindowId);
+      if (!groupTabs.length && !hasPinnedTabs && (hasDestinationSnapshots || needsTemporaryPlaceholder)
+        && window.placeholderTabId === null) {
         try {
           const placeholder = await this.#browser.createPlaceholder(window.browserWindowId, window.id);
           state = await checkpoint((current) => setWindowPlaceholder(
@@ -931,7 +1486,7 @@ export class WorkspaceController {
         } catch (error) {
           failures.push(`Could not create a New Tab placeholder in window ${window.browserWindowId}: ${error.message}`);
         }
-      } else if (groupTabs.length && window.placeholderTabId !== null) {
+      } else if ((groupTabs.length || hasPinnedTabs) && window.placeholderTabId !== null) {
         try {
           await this.#browser.removeTabs([window.placeholderTabId]);
           state = await checkpoint((current) => ({
@@ -964,11 +1519,131 @@ export class WorkspaceController {
       }
     }
 
+    const focusLiveWindows = await this.#browser.getNormalWindows();
+    const finalLiveWindowIds = new Set(focusLiveWindows.map((window) => window.id));
+    const destinationGroupWindowIds = new Set(state.tabs
+      .filter((tab) => tab.groupId === destinationGroupId && tab.status === "open"
+        && isMeaningfulTab(tab, this.#browser.isPlaceholderUrl))
+      .map((tab) => tab.windowId));
+    const usableWindow = (window) => finalLiveWindowIds.has(window.browserWindowId)
+      && (destinationGroupWindowIds.has(window.id)
+        || (focusLiveWindows.find((item) => item.id === window.browserWindowId)?.tabs ?? [])
+          .some((tab) => tab.pinned && !tab.incognito));
+    const finalWindowRecords = state.windows.filter((window) => window.isOpen
+      && finalLiveWindowIds.has(window.browserWindowId));
+    const requestedFocusedWindow = finalWindowRecords.find((window) =>
+      window.browserWindowId === operation.payload.requestedFocusedBrowserWindowId && usableWindow(window));
+    const focusedWindow = requestedFocusedWindow
+      ?? finalWindowRecords.find((window) => destinationGroupWindowIds.has(window.id))
+      ?? finalWindowRecords.find((window) => usableWindow(window))
+      ?? finalWindowRecords.find((window) => window.placeholderTabId !== null);
+    if (focusedWindow) {
+      await this.#browser.focusWindow(focusedWindow.browserWindowId).catch((error) => {
+        failures.push(`Could not focus destination window ${focusedWindow.browserWindowId}: ${error.message}`);
+      });
+    }
+
     return { failures, restoredCount: restoredTabIds.size };
+  }
+
+  async #consumePreCloseWindowRemovals(
+    operation,
+    initialState,
+    initialCloseRecords,
+    initialClosingTabIds,
+    closeWindowIds,
+    suppressedWindowRecordIds,
+    checkpoint,
+  ) {
+    let state = initialState;
+    let closeRecords = initialCloseRecords;
+    let closingTabIds = initialClosingTabIds;
+    let finalWindowClosed = false;
+    const startedIds = new Set(operation.payload.windowCloseStartedIds ?? []);
+    for (const [browserWindowId, { preserveTabs = false } = {}] of this.#preCloseWindowRemovals) {
+      if (startedIds.has(browserWindowId)) continue;
+      const logicalWindow = state.windows.find((window) => window.browserWindowId === browserWindowId);
+      if (preserveTabs) {
+        if (logicalWindow) suppressedWindowRecordIds.add(logicalWindow.id);
+        state = await checkpoint((current) => {
+          const closed = handleWindowRemoved(current, browserWindowId, { preserveTabs: true });
+          return {
+            ...closed,
+            operations: closed.operations.map((pending) => pending.id === operation.id
+              ? {
+                ...pending,
+                payload: {
+                  ...pending.payload,
+                  finalWindowClosed: true,
+                  userClosedWindowRecordIds: [...suppressedWindowRecordIds],
+                },
+              }
+              : pending),
+          };
+        });
+        this.#preCloseWindowRemovals.delete(browserWindowId);
+        finalWindowClosed = true;
+        continue;
+      }
+      const currentOperation = state.operations.find((pending) => pending.id === operation.id) ?? operation;
+      const restoredWindowRecordIds = new Set(currentOperation.payload.restoredWindowRecordIds ?? []);
+      const destinationWasRestored = logicalWindow && restoredWindowRecordIds.has(logicalWindow.id);
+      const groupWindowRecordIds = new Set(state.tabs
+        .filter((tab) => tab.groupId === state.activeGroupId
+          && (logicalWindow ? tab.windowId === logicalWindow.id : tab.browserWindowId === browserWindowId)
+          && (tab.status === "open" || destinationWasRestored))
+        .map((tab) => tab.id));
+      const forgottenRecordIds = new Set(destinationWasRestored
+        ? []
+        : closeRecords.filter((record) => record.browserWindowId === browserWindowId)
+          .map((record) => record.id));
+      for (const recordId of groupWindowRecordIds) forgottenRecordIds.add(recordId);
+      const forgottenBrowserTabIds = new Set(closeRecords
+        .filter((record) => forgottenRecordIds.has(record.id))
+        .map((record) => record.browserTabId));
+      for (const tab of state.tabs) {
+        if (forgottenRecordIds.has(tab.id)) forgottenBrowserTabIds.add(tab.browserTabId);
+      }
+      closeRecords = closeRecords.filter((record) => !forgottenRecordIds.has(record.id));
+      closingTabIds = new Set([...closingTabIds].filter((tabId) => !forgottenBrowserTabIds.has(tabId)));
+      closeWindowIds.delete(browserWindowId);
+      if (logicalWindow) suppressedWindowRecordIds.add(logicalWindow.id);
+      state = await checkpoint((current) => ({
+        ...current,
+        tabs: current.tabs.filter((tab) => !forgottenRecordIds.has(tab.id)),
+        windows: current.windows.map((window) => window.browserWindowId === browserWindowId
+          ? { ...window, isOpen: false, placeholderTabId: null, pinnedTabIds: [] }
+          : window),
+        operations: current.operations.map((pending) => pending.id === operation.id
+          ? {
+            ...pending,
+            payload: {
+              ...pending.payload,
+              closeRecords,
+              closingTabIds: [...closingTabIds],
+              closeWindowIds: [...closeWindowIds],
+              discardRecordIds: (pending.payload.discardRecordIds ?? [])
+                .filter((recordId) => !forgottenRecordIds.has(recordId)),
+              userClosedWindowRecordIds: [...suppressedWindowRecordIds],
+            },
+          }
+          : pending),
+      }));
+      this.#preCloseWindowRemovals.delete(browserWindowId);
+    }
+    return { state, closeRecords, closingTabIds, finalWindowClosed };
   }
 
   async #reconcile(previousState) {
     const liveWindows = await this.#browser.getNormalWindows();
+    this.#startupFinalWindowCloseIds = new Set(
+      [...this.#startupTabRemovals]
+        .filter(([, removeInfo]) => removeInfo.isWindowClosing
+          && !liveWindows.some((window) => window.id !== removeInfo.windowId))
+        .map(([, removeInfo]) => removeInfo.windowId)
+        .concat([...this.#startupWindowRemovals]
+          .filter((windowId) => !liveWindows.some((window) => window.id !== windowId))),
+    );
     const state = this.#applyStartupTabRemovals(structuredClone(previousState), previousState);
     const matchedLogicalWindows = new Set();
     const matchedSnapshotIds = new Set();
@@ -980,8 +1655,11 @@ export class WorkspaceController {
       const tabs = [...(browserWindow.tabs ?? [])].sort((a, b) => a.index - b.index);
       let logicalWindow = chooseLogicalWindow(state, browserWindow, tabs, matchedLogicalWindows, this.#browser);
       if (!logicalWindow) {
+        const pendingTemporaryId = tabs.map((tab) => placeholderWindowKey(this.#browser, tab))
+          .find((key) => typeof key === "string" && state.operations.some((operation) =>
+            operation.payload.temporaryWindowId === key));
         const newWindow = {
-          id: crypto.randomUUID(),
+          id: pendingTemporaryId ?? crypto.randomUUID(),
           browserWindowId: browserWindow.id,
           isOpen: true,
           placeholderTabId: null,
@@ -1070,7 +1748,7 @@ export class WorkspaceController {
         : operation;
     });
 
-    return state;
+    return pruneUnreferencedWindows(state);
   }
 
   async #ensurePlaceholder(browserWindowId) {
@@ -1081,6 +1759,21 @@ export class WorkspaceController {
     if (state.tabs.some((tab) => tab.groupId === state.activeGroupId
       && tab.browserWindowId === browserWindowId
       && tab.status === "open")) return;
+
+    const liveWindow = (await this.#browser.getNormalWindows())
+      .find((candidate) => candidate.id === browserWindowId);
+    const livePinnedTabIds = (liveWindow?.tabs ?? [])
+      .filter((tab) => tab.pinned && !tab.incognito)
+      .map((tab) => tab.id);
+    if (livePinnedTabIds.length) {
+      await this.#store.update((current) => ({
+        ...current,
+        windows: current.windows.map((candidate) => candidate.id === window.id
+          ? { ...candidate, pinnedTabIds: livePinnedTabIds }
+          : candidate),
+      }));
+      return;
+    }
 
     const placeholder = await this.#browser.createPlaceholder(browserWindowId, window.id);
     await this.#store.update((current) => setWindowPlaceholder(current, browserWindowId, placeholder.id));

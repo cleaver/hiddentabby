@@ -33,6 +33,12 @@ export function createChromeBrowserApi(chromeApi = globalThis.chrome) {
         .map((window) => ({ ...window, tabs: (window.tabs ?? []).filter((tab) => !tab.incognito) }));
     },
 
+    async getLastFocusedWindow() {
+      const window = await chromeApi.windows.getLastFocused({ populate: false });
+      if (!window || window.incognito || (window.type && window.type !== "normal")) return null;
+      return window;
+    },
+
     async getTab(tabId) {
       return chromeApi.tabs.get(tabId);
     },
@@ -56,6 +62,14 @@ export function createChromeBrowserApi(chromeApi = globalThis.chrome) {
 
     async createWindow(properties = {}) {
       return chromeApi.windows.create(properties);
+    },
+
+    async removeWindow(windowId) {
+      return chromeApi.windows.remove(windowId);
+    },
+
+    async focusWindow(windowId) {
+      return chromeApi.windows.update(windowId, { focused: true });
     },
 
     async createWindowWithPlaceholder(logicalWindowId) {

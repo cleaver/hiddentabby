@@ -7,6 +7,8 @@ import {
   createGroup,
   deleteGroup,
   handleTabRemoved,
+  handleWindowRemoved,
+  isMeaningfulTab,
   markTabClosed,
   moveTab,
   planGroupSwitch,
@@ -21,6 +23,46 @@ function idFactory() {
   let next = 0;
   return () => `id-${++next}`;
 }
+
+test("meaningful-tab detection ignores placeholders and browser New Tab pages, including pending navigation", () => {
+  const isPlaceholderUrl = (url) => url?.startsWith("chrome-extension://test/placeholder.html") ?? false;
+  assert.equal(isMeaningfulTab({ url: "https://example.com/" }, isPlaceholderUrl), true);
+  assert.equal(isMeaningfulTab({ url: "https://example.com/", title: "New Tab" }, isPlaceholderUrl), true,
+    "A page title must not determine whether its content is blank.");
+  assert.equal(isMeaningfulTab({ url: "chrome://newtab/" }, isPlaceholderUrl), false);
+  assert.equal(isMeaningfulTab({ url: "brave://newtab/" }, isPlaceholderUrl), false);
+  assert.equal(isMeaningfulTab({ url: "chrome-search://local-ntp/local-ntp.html" }, isPlaceholderUrl), false);
+  assert.equal(isMeaningfulTab({ url: "chrome-extension://test/placeholder.html?window=one" }, isPlaceholderUrl), false);
+  assert.equal(isMeaningfulTab({ url: "chrome://newtab/", pendingUrl: "https://loading.example/" }, isPlaceholderUrl), true,
+    "A meaningful pending destination must protect a tab still reporting its New Tab URL.");
+  assert.equal(isMeaningfulTab({ url: "https://example.com/", pendingUrl: "chrome://newtab/" }, isPlaceholderUrl), false,
+    "The pending destination determines membership during navigation.");
+  assert.equal(isMeaningfulTab({ url: "about:blank", title: "New Tab" }, isPlaceholderUrl), true,
+    "Unknown blank-looking pages are retained conservatively.");
+  assert.equal(isMeaningfulTab({ url: "https://pinned.example/", pinned: true }, isPlaceholderUrl), false);
+});
+
+test("a browser New Tab stays with a useful tab in the same group and logical window", () => {
+  const ids = idFactory();
+  const state = createFirstRunState([
+    { id: 501, windowId: 50, index: 0, url: "https://useful.example", title: "Useful" },
+    { id: 502, windowId: 50, index: 1, url: "chrome://newtab/", title: "New Tab" },
+  ], { createId: ids });
+  const closedState = {
+    ...state,
+    windows: state.windows.map((window) => ({ ...window, isOpen: false })),
+    tabs: state.tabs.map((tab) => ({ ...tab, browserTabId: null, status: "closed" })),
+  };
+
+  const plan = planGroupSwitch(closedState, state.activeGroupId);
+
+  assert.deepEqual(plan.restoreTabs.map((tab) => tab.url), [
+    "https://useful.example",
+    "chrome://newtab/",
+  ]);
+  assert.deepEqual(plan.recreateWindowIds, [50]);
+  assert.deepEqual(plan.discardTabIds, []);
+});
 
 test("first run assigns every normal unpinned tab and excludes pinned and incognito tabs", () => {
   const state = createFirstRunState([
@@ -37,6 +79,15 @@ test("first run assigns every normal unpinned tab and excludes pinned and incogn
   assert.notEqual(state.tabs[0].windowId, state.tabs[0].browserWindowId);
   assert.deepEqual(state.windows.map((window) => window.browserWindowId), [11, 12]);
   assert.deepEqual(state.windows[1].pinnedTabIds, [2]);
+});
+
+test("first-run snapshots prefer a meaningful pending URL over a browser New Tab URL", () => {
+  const state = createFirstRunState([
+    { id: 4, windowId: 14, url: "chrome://newtab/", pendingUrl: "https://loading.example/" },
+  ], { createId: idFactory() });
+
+  assert.equal(state.tabs[0].url, "https://loading.example/");
+  assert.equal(isMeaningfulTab(state.tabs[0]), true);
 });
 
 test("group creation, rename, recolor, and reordering preserve active group", () => {
@@ -57,7 +108,7 @@ test("group creation, rename, recolor, and reordering preserve active group", ()
   assert.throws(() => reorderGroups(reordered, [secondId, secondId]), /exactly once/);
 });
 
-test("switch plan closes inactive tabs and restores destination tabs in their original windows", () => {
+test("switch plan closes inactive tabs and unused windows while restoring destination tabs", () => {
   const ids = idFactory();
   let state = createFirstRunState([
     { id: 101, windowId: 7, url: "https://active.example" },
@@ -74,9 +125,125 @@ test("switch plan closes inactive tabs and restores destination tabs in their or
   assert.equal(plan.state.activeGroupId, otherId);
   assert.deepEqual(plan.closeTabs.map((tab) => tab.browserTabId), [101]);
   assert.deepEqual(plan.restoreTabs.map((tab) => tab.browserWindowId), [8]);
-  assert.deepEqual(plan.placeholderWindowIds, [7]);
+  assert.deepEqual(plan.placeholderWindowIds, []);
+  assert.deepEqual(plan.closeWindowIds, [7]);
   assert.deepEqual(plan.recreateWindowIds, []);
   assert.equal(plan.state.groups.find((group) => group.id === defaultId).name, "Default");
+});
+
+test("switch layout reuses a shared destination window and closes unused unpinned windows", () => {
+  const ids = idFactory();
+  let state = createFirstRunState([
+    { id: 2101, windowId: 210, url: "https://default-one.example" },
+    { id: 2201, windowId: 220, url: "https://default-two.example" },
+  ], { createId: ids });
+  const defaultGroupId = state.activeGroupId;
+  state = createGroup(state, { name: "One Window" }, { createId: ids });
+  const oneWindowId = state.groups[1].id;
+  state = assignTab(state, { id: 2102, windowId: 210, url: "https://other.example" }, oneWindowId);
+  state = {
+    ...state,
+    tabs: state.tabs.map((tab) => tab.browserTabId === 2102
+      ? { ...tab, browserTabId: null, status: "closed" }
+      : tab),
+  };
+
+  const toOneWindow = planGroupSwitch(state, oneWindowId);
+  assert.deepEqual(toOneWindow.closeWindowIds, [220]);
+  assert.deepEqual(toOneWindow.recreateWindowIds, []);
+  assert.deepEqual(toOneWindow.restoreTabs.map((tab) => tab.url), ["https://other.example"]);
+
+  const defaultInSecondWindow = state.tabs.find((tab) => tab.browserWindowId === 220);
+  const afterOneWindow = {
+    ...toOneWindow.state,
+    windows: state.windows.map((window) => window.browserWindowId === 220
+      ? { ...window, isOpen: false }
+      : window),
+    tabs: state.tabs.map((tab) => tab.id === defaultInSecondWindow.id
+      ? { ...tab, browserTabId: null, status: "closed" }
+      : tab.groupId === oneWindowId
+        ? { ...tab, browserTabId: 2102, status: "open" }
+        : { ...tab, browserTabId: null, status: "closed" }),
+  };
+  const backToDefault = planGroupSwitch(afterOneWindow, defaultGroupId);
+  assert.deepEqual(backToDefault.recreateWindowIds, [220],
+    "Returning to the two-window group must recreate its dormant logical window.");
+  assert.deepEqual(backToDefault.closeWindowIds, []);
+  assert.deepEqual(new Set(backToDefault.restoreTabs.map((tab) => tab.browserWindowId)), new Set([210, 220]));
+});
+
+test("blank-only group windows are discarded while mixed windows retain meaningful duplicate tabs", () => {
+  const ids = idFactory();
+  let state = createFirstRunState([
+    { id: 3101, windowId: 310, url: "https://same.example" },
+    { id: 3102, windowId: 310, url: "https://same.example" },
+    { id: 3103, windowId: 310, url: "chrome://newtab/" },
+    { id: 3104, windowId: 310, url: "chrome-extension://test/placeholder.html?window=logical" },
+    { id: 3201, windowId: 320, url: "brave://newtab/" },
+  ], { createId: ids });
+  state = createGroup(state, { name: "Research" }, { createId: ids });
+  const researchId = state.groups[1].id;
+  state = {
+    ...state,
+    tabs: state.tabs.map((tab) => ({
+      ...tab,
+      groupId: researchId,
+      browserTabId: null,
+      status: "closed",
+    })),
+  };
+
+  const isPlaceholderUrl = (url) => url.startsWith("chrome-extension://test/placeholder.html");
+  const plan = planGroupSwitch(state, researchId, { isPlaceholderUrl });
+  assert.deepEqual(plan.restoreTabs.map((tab) => tab.browserTabId), [null, null, null]);
+  assert.deepEqual(plan.restoreTabs.map((tab) => tab.url), [
+    "https://same.example",
+    "https://same.example",
+    "chrome://newtab/",
+  ], "The duplicate tabs and mixed-window New Tab remain distinct saved tabs.");
+  const newTabOnlyWindowId = state.tabs.find((tab) => tab.url === "brave://newtab/").windowId;
+  assert.deepEqual(plan.discardTabIds, state.tabs
+    .filter((tab) => isPlaceholderUrl(tab.url) || tab.windowId === newTabOnlyWindowId)
+    .map((tab) => tab.id));
+  assert.deepEqual(plan.closeWindowIds, [320],
+    "A New-Tab-only window is not part of the destination group's layout.");
+});
+
+test("empty groups retain pinned windows and one temporary window only when needed", () => {
+  const ids = idFactory();
+  let state = createFirstRunState([
+    { id: 4101, windowId: 410, url: "https://outgoing-one.example" },
+    { id: 4201, windowId: 420, pinned: true, url: "https://pinned.example" },
+    { id: 4301, windowId: 430, url: "https://outgoing-two.example" },
+  ], { createId: ids });
+  state = createGroup(state, { name: "Empty" }, { createId: ids });
+  const emptyGroupId = state.groups[1].id;
+
+  const withPinned = planGroupSwitch(state, emptyGroupId);
+  assert.deepEqual(withPinned.closeWindowIds, [410, 430]);
+  assert.deepEqual(withPinned.placeholderWindowIds, [],
+    "Pinned tabs keep their window usable without an extension placeholder.");
+  assert.equal(withPinned.createTemporaryWindow, false);
+
+  const withoutPinnedState = {
+    ...state,
+    windows: state.windows.map((window) => ({ ...window, pinnedTabIds: [] })),
+  };
+  const withoutPinned = planGroupSwitch(withoutPinnedState, emptyGroupId);
+  assert.deepEqual(withoutPinned.closeWindowIds, [420, 430]);
+  assert.deepEqual(withoutPinned.placeholderWindowIds, [410],
+    "Keep one existing window for temporary continuity and close the rest.");
+  assert.equal(withoutPinned.createTemporaryWindow, false);
+
+  const noOpenWindows = {
+    ...withoutPinnedState,
+    windows: withoutPinnedState.windows.map((window) => ({ ...window, isOpen: false })),
+  };
+  const noWindow = planGroupSwitch(noOpenWindows, emptyGroupId);
+  assert.deepEqual(noWindow.closeWindowIds, []);
+  assert.deepEqual(noWindow.placeholderWindowIds, []);
+  assert.equal(noWindow.createTemporaryWindow, true,
+    "An empty group remains usable when there is no normal window to retain.");
 });
 
 test("switching back removes placeholders only in windows receiving restored group tabs", () => {
@@ -171,7 +338,7 @@ test("renaming the final Default is rejected", () => {
   assert.throws(() => renameGroup(state, state.activeGroupId, "Work"), /must remain named Default/);
 });
 
-test("a pinned-only window also gets the selected-group placeholder", () => {
+test("a pinned-only window stays open without an unnecessary group placeholder", () => {
   const ids = idFactory();
   let state = createFirstRunState([
     { id: 901, windowId: 90, url: "https://managed.example" },
@@ -179,7 +346,9 @@ test("a pinned-only window also gets the selected-group placeholder", () => {
   ], { createId: ids });
   state = createGroup(state, { name: "Empty" }, { createId: ids });
   const plan = planGroupSwitch(state, state.groups[1].id);
-  assert.deepEqual(plan.placeholderWindowIds, [90, 91]);
+  assert.deepEqual(plan.closeWindowIds, [90]);
+  assert.deepEqual(plan.placeholderWindowIds, []);
+  assert.equal(plan.createTemporaryWindow, false);
 });
 
 test("closed tab snapshots remain restorable and duplicate URLs retain separate identities", () => {
@@ -219,6 +388,62 @@ test("manually closing one tab removes it, while closing a window keeps snapshot
   const toDefault = planGroupSwitch(toLater.state, defaultId);
   assert.deepEqual(toDefault.recreateWindowIds, [110]);
   assert.deepEqual(toDefault.restoreTabs.map((tab) => tab.id), [windowTabId]);
+});
+
+test("closing a nonfinal window forgets its active-group tabs but retains inactive snapshots", () => {
+  const ids = idFactory();
+  let state = createFirstRunState([
+    { id: 1201, windowId: 120, url: "https://active.example" },
+    { id: 1202, windowId: 120, url: "https://inactive.example" },
+    { id: 1203, windowId: 120, url: "https://stale-active-snapshot.example" },
+    { id: 1301, windowId: 130, url: "https://other-window.example" },
+  ], { createId: ids });
+  const activeGroupId = state.activeGroupId;
+  const inactiveGroup = createGroup(state, { name: "Inactive" }, { createId: ids });
+  const inactiveGroupId = inactiveGroup.groups[1].id;
+  const inactiveSnapshot = state.tabs.find((tab) => tab.browserTabId === 1202);
+  state = {
+    ...inactiveGroup,
+    tabs: inactiveGroup.tabs.map((tab) => tab.id === inactiveSnapshot.id
+      ? { ...tab, groupId: inactiveGroupId, browserTabId: null, status: "closed", sessionId: "saved-inactive" }
+      : tab.browserTabId === 1203
+        ? { ...tab, browserTabId: null, status: "closed", sessionId: "stale-active-session" }
+      : tab),
+  };
+
+  const closed = handleWindowRemoved(state, 120);
+  assert.equal(closed.tabs.some((tab) => tab.browserTabId === 1201), false,
+    "The active group's tabs in the closed window are forgotten.");
+  assert.equal(closed.tabs.some((tab) => tab.url === "https://stale-active-snapshot.example"), false,
+    "A stale closed snapshot in the active group must not revive contents of a user-closed window.");
+  assert.deepEqual(closed.tabs.filter((tab) => tab.groupId === inactiveGroupId).map((tab) => tab.id), [inactiveSnapshot.id],
+    "An inactive group's snapshot remains available even though it shares the logical window.");
+  assert.equal(closed.tabs.find((tab) => tab.id === inactiveSnapshot.id).sessionId, "saved-inactive");
+  assert.equal(closed.tabs.some((tab) => tab.groupId === activeGroupId && tab.browserWindowId === 130), true,
+    "Closing one window leaves the active group's other window alone.");
+  assert.equal(closed.windows.find((window) => window.browserWindowId === 120).isOpen, false);
+
+  const repeated = handleWindowRemoved(closed, 120);
+  assert.deepEqual(repeated, closed, "Repeated window-close events are idempotent.");
+});
+
+test("closing the final window through tab and window events preserves all group snapshots", () => {
+  const ids = idFactory();
+  let state = createFirstRunState([
+    { id: 1401, windowId: 140, url: "https://current.example" },
+  ], { createId: ids });
+  const currentTabId = state.tabs[0].id;
+  const closedAtFinalWindow = handleTabRemoved(state, 1401, {
+    isWindowClosing: true,
+    windowId: 140,
+  });
+  const afterWindowEvent = handleWindowRemoved(closedAtFinalWindow, 140, { preserveTabs: true });
+
+  assert.equal(afterWindowEvent.tabs.length, 1);
+  assert.equal(afterWindowEvent.tabs[0].id, currentTabId);
+  assert.equal(afterWindowEvent.tabs[0].status, "closed");
+  assert.equal(afterWindowEvent.tabs[0].browserTabId, null);
+  assert.equal(afterWindowEvent.windows[0].isOpen, false);
 });
 
 test("pinned and incognito tabs are ignored when assigned after first run", () => {

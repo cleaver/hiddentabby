@@ -1,6 +1,6 @@
 # HiddenTabby
 
-HiddenTabby is a local-only Manifest V3 extension for Chrome and Brave. It organizes unpinned tabs into named groups shared across normal windows. Switching groups closes the inactive tabs and restores the selected group's tabs in their original windows.
+HiddenTabby is a local-only Manifest V3 extension for Chrome and Brave. It organizes unpinned tabs into named groups shared across normal windows. Each group remembers the windows containing its tabs; switching restores that layout, closes unneeded unpinned windows, and focuses a useful window for the selected group.
 
 ## Load it locally
 
@@ -16,7 +16,9 @@ When only one tab from a HiddenTabby group is open in a window, HiddenTabby leav
 
 ## Restore behavior and privacy
 
-Inactive group tabs are closed so that windows can show only the selected group. HiddenTabby asks the browser Sessions API to restore closed tabs, then falls back to their saved URLs when no session is available. A restored page may lose unsaved form data, in-memory state, or running scripts. Empty windows keep one temporary New Tab placeholder; navigating it adds it to the active group.
+Inactive group tabs are closed so that windows can show only the selected group. Windows with pinned tabs stay open, and pinned tabs remain outside every group. A New Tab page is saved only when its group has another meaningful tab in that same logical window; New-Tab-only windows and HiddenTabby placeholders are not remembered. Empty groups keep pinned windows without extra placeholders, or retain one temporary window when no pinned window is available. Navigating its placeholder adds the page to the active group.
+
+HiddenTabby asks the browser Sessions API to restore closed tabs, then falls back to their saved URLs when no session is available. A restored page may lose unsaved form data, in-memory state, or running scripts. Closing a nonfinal normal window manually forgets the active group's tabs in that window; saved tabs from inactive groups that share the logical window remain available. Closing the final normal window preserves useful group snapshots for the next browser start. This applies only to the final window: windows closed earlier while other normal windows remained are forgotten.
 
 Group and tab metadata, including page titles and URLs, stays in `chrome.storage.local` in the current browser profile so HiddenTabby can manage and restore workspaces. HiddenTabby does not sync or upload this data to an external service. See the [Privacy Policy](PRIVACY.md). The extension requests `tabs` and `tabGroups` to inspect/manage groups, `sessions` for tab restoration, `contextMenus` for the tab-strip move action, `storage` for local persistence, and `sidePanel` for the optional manager surface.
 
