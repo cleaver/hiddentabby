@@ -148,6 +148,138 @@ test("restart reconciles live tabs and does not repeat first-run adoption", asyn
   assert.equal(calls.filter(([name]) => name === "updateGroups").length, 1);
 });
 
+test("a tab close that wakes the worker is forgotten across a four-group round trip", async () => {
+  const windows = [normalWindow()];
+  const first = setup(windows);
+  const initial = await first.controller.getState();
+  const removed = initial.tabs.find((tab) => tab.browserTabId === 101);
+  const groupIds = [initial.activeGroupId];
+  for (const name of ["Second", "Third", "Fourth"]) {
+    const state = await first.controller.createGroup({ name });
+    groupIds.push(state.groups.find((group) => group.name === name).id);
+  }
+
+  // The worker was stopped before Chrome dispatched the user's close event.
+  windows[0].tabs = windows[0].tabs.filter((tab) => tab.id !== 101);
+  const store = new StateStore(first.storage, { createInitialState: createInitialStateFactory(first.browser) });
+  const restarted = new WorkspaceController({ store, browser: first.browser });
+  await restarted.onTabRemoved(101, { windowId: 10, isWindowClosing: false });
+
+  assert.equal((await restarted.getState()).tabs.some((tab) => tab.id === removed.id), false,
+    "Startup must not turn a manually closed tab into a saved snapshot.");
+  for (const groupId of [...groupIds.slice(1), groupIds[0]]) await restarted.switchGroup(groupId);
+  assert.equal((await restarted.getState()).tabs.some((tab) => tab.id === removed.id), false);
+  assert.equal(windows[0].tabs.some((tab) => tab.url === removed.url), false,
+    "Switching back must never recreate the closed tab.");
+});
+
+test("multiple closes arriving during startup persistence forget only the closed duplicate records", async () => {
+  const windows = [normalWindow()];
+  windows[0].tabs.push(
+    { ...windows[0].tabs[0], id: 103, index: 2 },
+    { ...windows[0].tabs[0], id: 104, index: 3 },
+  );
+  const first = setup(windows);
+  const initial = await first.controller.getState();
+  const survivor = initial.tabs.find((tab) => tab.browserTabId === 104);
+  windows[0].tabs = windows[0].tabs.filter((tab) => ![101, 103].includes(tab.id));
+
+  let releaseWrite;
+  let notifyWrite;
+  const writeStarted = new Promise((resolve) => { notifyWrite = resolve; });
+  const writeReleased = new Promise((resolve) => { releaseWrite = resolve; });
+  const set = first.storage.set.bind(first.storage);
+  let blockFirstWrite = true;
+  first.storage.set = async (key, value) => {
+    if (blockFirstWrite) {
+      blockFirstWrite = false;
+      notifyWrite();
+      await writeReleased;
+    }
+    return set(key, value);
+  };
+  const store = new StateStore(first.storage, { createInitialState: createInitialStateFactory(first.browser) });
+  const restarted = new WorkspaceController({ store, browser: first.browser });
+  const starting = restarted.getState();
+  await writeStarted;
+  const removals = [101, 103].map((id) => restarted.onTabRemoved(id, {
+    windowId: 10, isWindowClosing: false,
+  }));
+  releaseWrite();
+  await Promise.all([starting, ...removals]);
+
+  const remaining = (await restarted.getState()).tabs;
+  assert.deepEqual(remaining.map((tab) => tab.id), [survivor.id],
+    "Late startup close events must remove their original records while retaining a legitimate duplicate.");
+  const reloaded = new StateStore(first.storage);
+  assert.deepEqual((await reloaded.load()).tabs.map((tab) => tab.id), [survivor.id],
+    "The removals must also be durable.");
+});
+
+test("a close delivered during native-group setup still uses its original startup identity", async () => {
+  const windows = [normalWindow()];
+  const first = setup(windows);
+  const initial = await first.controller.getState();
+  windows[0].tabs = windows[0].tabs.filter((tab) => tab.id !== 101);
+  let nativeSetupStarted;
+  let releaseNativeSetup;
+  const nativeStarted = new Promise((resolve) => { nativeSetupStarted = resolve; });
+  const nativeReleased = new Promise((resolve) => { releaseNativeSetup = resolve; });
+  first.browser.updateNativeGroups = async () => {
+    nativeSetupStarted();
+    await nativeReleased;
+  };
+  const store = new StateStore(first.storage, { createInitialState: createInitialStateFactory(first.browser) });
+  const restarted = new WorkspaceController({ store, browser: first.browser });
+  const starting = restarted.getState();
+  await nativeStarted;
+  const removal = restarted.onTabRemoved(101, { windowId: 10, isWindowClosing: false });
+  releaseNativeSetup();
+  await Promise.all([starting, removal]);
+
+  assert.equal((await restarted.getState()).tabs.some((tab) => tab.id === initial.tabs[0].id), false);
+});
+
+test("startup retries retain a manual removal when its first storage write fails", async () => {
+  const windows = [normalWindow()];
+  const first = setup(windows);
+  const initial = await first.controller.getState();
+  windows[0].tabs = windows[0].tabs.filter((tab) => tab.id !== 101);
+  const set = first.storage.set.bind(first.storage);
+  let failOnce = true;
+  first.storage.set = async (key, value) => {
+    if (failOnce) {
+      failOnce = false;
+      throw new Error("injected startup storage failure");
+    }
+    return set(key, value);
+  };
+  const store = new StateStore(first.storage, { createInitialState: createInitialStateFactory(first.browser) });
+  const restarted = new WorkspaceController({ store, browser: first.browser });
+  await assert.rejects(restarted.onTabRemoved(101, { windowId: 10, isWindowClosing: false }),
+    /injected startup storage failure/);
+
+  const retried = await restarted.getState();
+  assert.equal(retried.tabs.some((tab) => tab.id === initial.tabs[0].id), false,
+    "A failed startup write must not discard the pending removal intent.");
+  assert.equal((await new StateStore(first.storage).load()).tabs.length, 0);
+});
+
+test("a window close that wakes the worker still preserves dormant tab snapshots", async () => {
+  const windows = [normalWindow()];
+  const first = setup(windows);
+  const initial = await first.controller.getState();
+  windows.splice(0);
+  const store = new StateStore(first.storage, { createInitialState: createInitialStateFactory(first.browser) });
+  const restarted = new WorkspaceController({ store, browser: first.browser });
+  await restarted.onTabRemoved(101, { windowId: 10, isWindowClosing: true });
+
+  const state = await restarted.getState();
+  assert.equal(state.tabs[0].id, initial.tabs[0].id);
+  assert.equal(state.tabs[0].status, "closed");
+  assert.equal(state.windows[0].isOpen, false);
+});
+
 test("placeholder keys reconnect empty windows to their stable records after browser IDs change", async () => {
   const first = setup([normalWindow(10), normalWindow(20)]);
   const saved = await first.controller.getState();
@@ -855,6 +987,7 @@ test("a failed tab close stays journaled and is replayed after controller restar
   assert.equal(first.store.snapshot().operations.length, 1);
   const restartedStore = new StateStore(first.storage, { createInitialState: createInitialStateFactory(first.browser) });
   const restarted = new WorkspaceController({ store: restartedStore, browser: first.browser });
+  await restarted.onTabRemoved(101, { windowId: 10, isWindowClosing: false });
   const recovered = await restarted.getState();
 
   assert.equal(recovered.operations.length, 0);

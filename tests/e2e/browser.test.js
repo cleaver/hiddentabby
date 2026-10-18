@@ -1461,6 +1461,15 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
     await popup.client.evaluate("window.__madcssCloseTrace=[];chrome.tabs.onRemoved.addListener((id,info)=>{if(id==="
       + madcssTab.id
       + ")window.__madcssCloseTrace.push({event:'tab-removed',id,isWindowClosing:info.isWindowClosing,windowId:info.windowId});});chrome.tabs.onCreated.addListener((tab)=>{if(tab.url?.includes('madcss.com')||tab.pendingUrl?.includes('madcss.com'))window.__madcssCloseTrace.push({event:'tab-created',id:tab.id,url:tab.url,pendingUrl:tab.pendingUrl});});");
+    const workerBeforeClose = await waitFor(async () => (await browserTargets(endpointUrl))
+      .find((target) => target.type === "service_worker"
+        && target.url === "chrome-extension://" + extensionId + "/src/service-worker.js") ?? null,
+    Boolean, "service worker before cold tab close");
+    const workerStopped = await browserClient.send("Target.closeTarget", { targetId: workerBeforeClose.id });
+    assert.equal(workerStopped.success, true);
+    await waitFor(async () => !(await browserTargets(endpointUrl))
+      .some((target) => target.id === workerBeforeClose.id), Boolean,
+    "service worker stops before the tab close wakes it");
     const closeResult = await browserClient.send("Target.closeTarget", { targetId: madcssTarget.id });
     assert.equal(closeResult.success, true, "The browser must close the actual madcss.com tab target.");
     const madcssStateAfterClose = await waitFor(

@@ -27,6 +27,8 @@ export class WorkspaceController {
   #store;
   #browser;
   #ready = null;
+  #initialized = false;
+  #startupTabRemovals = new Map();
   #preCloseTabRemovals = new Map();
   #closeOperationsPreparing = new Set();
   #closeRequestsIssued = new Set();
@@ -40,7 +42,10 @@ export class WorkspaceController {
   initialize() {
     if (!this.#ready) {
       this.#ready = this.#initialize();
-      this.#ready.catch(() => { this.#ready = null; });
+      this.#ready.catch(() => {
+        this.#ready = null;
+        this.#initialized = false;
+      });
     }
     return this.#ready;
   }
@@ -263,7 +268,13 @@ export class WorkspaceController {
   }
 
   async onTabRemoved(tabId, removeInfo) {
+    const duringStartup = !this.#initialized;
+    if (duringStartup) this.#startupTabRemovals.set(tabId, { ...removeInfo });
     await this.initialize();
+    if (duringStartup) {
+      if (!removeInfo.isWindowClosing) await this.#ensurePlaceholder(removeInfo.windowId);
+      return this.#store.snapshot();
+    }
     const state = this.#store.snapshot();
     const expectedOperation = state.operations.find((operation) => operationClosesTab(operation, state, tabId));
     if (expectedOperation) {
@@ -434,12 +445,45 @@ export class WorkspaceController {
   async #initialize() {
     const initial = await this.#store.load();
     let state = await this.#reconcile(initial);
-    await this.#store.update(() => state);
+    let processedRemovals = 0;
+    await this.#store.update(() => {
+      processedRemovals = this.#startupTabRemovals.size;
+      return this.#applyStartupTabRemovals(state, initial);
+    });
     if (state.operations.length) await this.#store.resumePending(this.#recoveryHandlers());
-    state = this.#store.snapshot();
-    if (this.#store.didCreateInitialState) await this.#browser.adoptInitialTabs(state);
-    else await this.#browser.updateNativeGroups(state);
-    await this.#browser.createMoveMenu(state);
+    let adoptInitialTabs = this.#store.didCreateInitialState;
+    do {
+      // Keep original IDs until all startup API calls and removal writes finish.
+      while (this.#startupTabRemovals.size > processedRemovals) {
+        await this.#store.update((current) => {
+          processedRemovals = this.#startupTabRemovals.size;
+          return this.#applyStartupTabRemovals(current, initial);
+        });
+      }
+      state = this.#store.snapshot();
+      if (adoptInitialTabs) await this.#browser.adoptInitialTabs(state);
+      else await this.#browser.updateNativeGroups(state);
+      adoptInitialTabs = false;
+      await this.#browser.createMoveMenu(state);
+    } while (this.#startupTabRemovals.size > processedRemovals);
+    this.#startupTabRemovals.clear();
+    this.#initialized = true;
+    return state;
+  }
+
+  #applyStartupTabRemovals(state, initial) {
+    for (const [tabId, removeInfo] of this.#startupTabRemovals) {
+      const expected = initial.operations.some((operation) => operationClosesTab(operation, initial, tabId))
+        || state.operations.some((operation) => operationClosesTab(operation, state, tabId));
+      if (!expected) {
+        const original = initial.tabs.find((tab) => tab.browserTabId === tabId);
+        state = handleTabRemoved(state, tabId, removeInfo);
+        if (!removeInfo.isWindowClosing && original) {
+          // Reconciliation may already have cleared the transient browser ID.
+          state = { ...state, tabs: state.tabs.filter((tab) => tab.id !== original.id) };
+        }
+      }
+    }
     return state;
   }
 
@@ -925,7 +969,7 @@ export class WorkspaceController {
 
   async #reconcile(previousState) {
     const liveWindows = await this.#browser.getNormalWindows();
-    const state = structuredClone(previousState);
+    const state = this.#applyStartupTabRemovals(structuredClone(previousState), previousState);
     const matchedLogicalWindows = new Set();
     const matchedSnapshotIds = new Set();
     const liveTabIds = new Set();
