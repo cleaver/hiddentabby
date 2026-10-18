@@ -198,11 +198,19 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
   try {
     execFileSync("unzip", ["-q", archive, "-d", extensionDirectory], { stdio: "inherit" });
     fixtureServer = createServer((request, response) => {
+      if (request.url === "/favicon.svg") {
+        response.writeHead(200, {
+          "content-type": "image/svg+xml",
+          "cache-control": "no-store",
+        });
+        response.end('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="#54c58c"/></svg>');
+        return;
+      }
       response.writeHead(200, {
         "content-type": "text/html; charset=utf-8",
         "cache-control": "no-store",
       });
-      response.end("<!doctype html><title>Placeholder Joined</title><main>Local HiddenTabby fixture</main>");
+      response.end('<!doctype html><link rel="icon" type="image/svg+xml" href="/favicon.svg"><title>Placeholder Joined</title><main>Local HiddenTabby fixture</main>');
     });
     await new Promise((resolveListen, rejectListen) => {
       fixtureServer.once("error", rejectListen);
@@ -774,6 +782,13 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
     const restoredSingletonRecord = restoredDefaultState.tabs.find((tab) => tab.id === secondTabRecord.id);
     assert.equal(restoredSingletonRecord?.groupId, defaultGroup.id,
       "The singleton tab must remain logically assigned to Default in HiddenTabby.");
+    const fixtureFaviconState = await waitFor(
+      () => readState(popup.client),
+      (state) => state.tabs.some((tab) => tab.url === fixtureUrl
+        && tab.faviconUrl?.endsWith("/favicon.svg")),
+      "fixture favicon tracking",
+    );
+    const fixtureFaviconUrl = fixtureFaviconState.tabs.find((tab) => tab.url === fixtureUrl)?.faviconUrl;
     await popup.client.evaluate("document.querySelector('#open-manager').click()");
     const manager = await waitFor(async () => {
       const target = (await browserTargets(endpointUrl)).find((candidate) => candidate.url.endsWith("/manager.html"));
@@ -790,20 +805,34 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
       (count) => count > 0,
       "workspace manager group cards rendered",
     );
-    const managerWorkspaceLayout = await managerClient.evaluate(`(() => {
+    const managerWorkspaceLayout = await managerClient.evaluate(`(async () => {
+      const state = (await chrome.runtime.sendMessage({type: "state:get"})).value;
       const cards = [...document.querySelectorAll(".group-card")];
       const rows = [...document.querySelectorAll(".tab-row")];
+      const windowLabels = rows.map((row) => row.querySelector(".tab-meta")?.textContent ?? "");
+      const urls = rows.map((row) => row.querySelector(".tab-url"));
+      const firstRecord = state.tabs.find((tab) => tab.id === ${JSON.stringify(firstLastActiveRecord.id)});
+      const secondRecord = state.tabs.find((tab) => tab.id === ${JSON.stringify(secondTabRecord.id)});
+      const firstRow = rows.find((row) => row.dataset.tabId === firstRecord?.id);
+      const secondRow = rows.find((row) => row.dataset.tabId === secondRecord?.id);
       return {
         hasSeparateTabsPanel: Boolean(document.querySelector("#tabs")),
         groupCount: cards.length,
         groupsWithTabLists: cards.filter((card) => card.querySelector(".tab-list")).length,
         tabRows: rows.length,
         tabRowsInsideGroups: rows.filter((row) => row.closest(".group-card")).length,
-        rowsMatchTheirGroup: rows.every((row) => {
-          const groupCard = row.closest(".group-card");
-          const groupName = groupCard?.querySelector(".group-title")?.textContent;
-          const meta = row.querySelector(".tab-meta")?.textContent;
-          return Boolean(groupName && meta?.startsWith(groupName + " · "));
+        rowsHaveFriendlyWindowLabels: windowLabels.every((label) => label.startsWith("Window #")
+          && /^[0-9]+$/.test(label.slice(8))),
+        windowLabelsContainNoGroupOrStatus: windowLabels.every((label) => !/ · |Open|Saved for restoration/.test(label)),
+        firstWindowLabel: firstRow?.querySelector(".tab-meta")?.textContent,
+        expectedFirstWindowLabel: "Window #" + (state.windows.findIndex((window) => window.id === firstRecord?.windowId) + 1),
+        secondWindowLabel: secondRow?.querySelector(".tab-meta")?.textContent,
+        expectedSecondWindowLabel: "Window #" + (state.windows.findIndex((window) => window.id === secondRecord?.windowId) + 1),
+        urlsStayOnOneSelectableLine: urls.every((url) => {
+          if (!url) return false;
+          const style = getComputedStyle(url);
+          return style.whiteSpace === "nowrap" && style.overflow === "hidden"
+            && style.textOverflow === "ellipsis" && style.userSelect === "all";
         }),
       };
     })()`);
@@ -814,8 +843,41 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
     assert.equal(managerWorkspaceLayout.tabRowsInsideGroups, managerWorkspaceLayout.tabRows,
       "Every saved tab should be rendered inside its owning group.");
     assert.ok(managerWorkspaceLayout.tabRows > 0, "The manager test should exercise tabs within groups.");
-    assert.equal(managerWorkspaceLayout.rowsMatchTheirGroup, true,
-      "Each saved tab should appear under the group named in its membership details.");
+    assert.equal(managerWorkspaceLayout.rowsHaveFriendlyWindowLabels, true,
+      "Tab rows should show simple window numbers instead of browser IDs.");
+    assert.equal(managerWorkspaceLayout.windowLabelsContainNoGroupOrStatus, true,
+      "Tab rows should not repeat the group name or open/saved state.");
+    assert.equal(managerWorkspaceLayout.firstWindowLabel, managerWorkspaceLayout.expectedFirstWindowLabel);
+    assert.equal(managerWorkspaceLayout.secondWindowLabel, managerWorkspaceLayout.expectedSecondWindowLabel);
+    assert.equal(managerWorkspaceLayout.firstWindowLabel, "Window #1");
+    assert.equal(managerWorkspaceLayout.secondWindowLabel, "Window #2");
+    assert.notEqual(managerWorkspaceLayout.firstWindowLabel, managerWorkspaceLayout.secondWindowLabel,
+      "Tabs in different browser windows should show different friendly labels.");
+    assert.equal(managerWorkspaceLayout.urlsStayOnOneSelectableLine, true,
+      "Long URLs should stay on one ellipsized line and select as a unit for copying.");
+    const faviconEvidence = await waitFor(
+      () => managerClient.evaluate(`(async () => {
+        const response = await chrome.runtime.sendMessage({type: "state:get"});
+        const record = response.value.tabs.find((tab) => tab.id === ${JSON.stringify(duplicateRecordIds[0])});
+        const row = [...document.querySelectorAll(".tab-row")]
+          .find((item) => item.dataset.tabId === record?.id);
+        const icon = row?.querySelector(".tab-favicon img");
+        const title = row?.querySelector(".tab-title");
+        return {
+          source: icon?.src ?? null,
+          faviconUrl: record?.faviconUrl ?? null,
+          loaded: Boolean(icon?.complete && icon.naturalWidth > 0),
+          beforeTitle: Boolean(icon && title
+            && (icon.compareDocumentPosition(title) & Node.DOCUMENT_POSITION_FOLLOWING)),
+        };
+      })()`),
+      (result) => result?.loaded && result.source === result.faviconUrl,
+      "manager tab favicon rendering",
+    );
+    assert.equal(faviconEvidence.source, fixtureFaviconUrl,
+      "The manager should render the browser-provided favicon URL.");
+    assert.equal(faviconEvidence.beforeTitle, true,
+      "The favicon should appear before the tab title.");
     const groupHeightLayout = await managerClient.evaluate(`(() => {
       const details = document.querySelector(".group-disclosure[open]");
       const summary = details?.querySelector(".group-summary");
@@ -975,7 +1037,7 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
       + JSON.stringify(defaultGroup.id)
       + "&&tab.status==='open'); const row=[...document.querySelectorAll('.tab-row')].find((item)=>item.querySelector('.tab-url')?.textContent==="
         + JSON.stringify(qaTabUrl)
-        + "&&item.querySelector('.tab-meta')?.textContent.startsWith('Default · Open')); const toggle=row?.querySelector('.tab-move-toggle'); const panel=row?.querySelector('.tab-move-panel'); return record&&row?{recordId:record.id,browserTabId:record.browserTabId,rowMeta:row.querySelector('.tab-meta').textContent,moveControl:{label:toggle?.getAttribute('aria-label')??null,title:toggle?.getAttribute('title')??null,tooltip:toggle?.getAttribute('data-tooltip')??null,expanded:toggle?.getAttribute('aria-expanded')??null,panelHidden:panel?.hidden??null}}:null; })()"),
+        + "); const toggle=row?.querySelector('.tab-move-toggle'); const panel=row?.querySelector('.tab-move-panel'); return record&&row?{recordId:record.id,browserTabId:record.browserTabId,moveControl:{label:toggle?.getAttribute('aria-label')??null,title:toggle?.getAttribute('title')??null,tooltip:toggle?.getAttribute('data-tooltip')??null,expanded:toggle?.getAttribute('aria-expanded')??null,panelHidden:panel?.hidden??null}}:null; })()"),
       Boolean,
       "manager renders the Default QA tab row",
     );
@@ -988,7 +1050,7 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
     }, "The compact move icon should have an accessible name and tooltip, with controls initially hidden.");
     const exposedMoveControls = await managerClient.evaluate("(() => { const row=[...document.querySelectorAll('.tab-row')].find((item)=>item.querySelector('.tab-url')?.textContent==="
       + JSON.stringify(qaTabUrl)
-      + "&&item.querySelector('.tab-meta')?.textContent.startsWith('Default · Open')); const toggle=row?.querySelector('.tab-move-toggle'); const panel=row?.querySelector('.tab-move-panel'); const rowHeightBefore=row?.getBoundingClientRect().height; toggle?.click(); const panelRect=panel?.getBoundingClientRect(); const toggleRect=toggle?.getBoundingClientRect(); return {expanded:toggle?.getAttribute('aria-expanded'),panelHidden:panel?.hidden,rowMarkedOpen:row?.classList.contains('tab-row-move-open'),selectFocused:document.activeElement===panel?.querySelector('select'),hasMoveButton:Boolean(panel?.querySelector('button')),hasCancelButton:[...(panel?.querySelectorAll('button')??[])].some((button)=>button.textContent.trim()==='Cancel'),position:getComputedStyle(panel).position,rowHeightUnchanged:rowHeightBefore===row?.getBoundingClientRect().height,panelBeforeIcon:panelRect?.right<=toggleRect?.left}; })()");
+      + "); const toggle=row?.querySelector('.tab-move-toggle'); const panel=row?.querySelector('.tab-move-panel'); const rowHeightBefore=row?.getBoundingClientRect().height; toggle?.click(); const panelRect=panel?.getBoundingClientRect(); const toggleRect=toggle?.getBoundingClientRect(); return {expanded:toggle?.getAttribute('aria-expanded'),panelHidden:panel?.hidden,rowMarkedOpen:row?.classList.contains('tab-row-move-open'),selectFocused:document.activeElement===panel?.querySelector('select'),hasMoveButton:Boolean(panel?.querySelector('button')),hasCancelButton:[...(panel?.querySelectorAll('button')??[])].some((button)=>button.textContent.trim()==='Cancel'),position:getComputedStyle(panel).position,rowHeightUnchanged:rowHeightBefore===row?.getBoundingClientRect().height,panelBeforeIcon:panelRect?.right<=toggleRect?.left}; })()");
     assert.deepEqual(exposedMoveControls, {
       expanded: "true",
       panelHidden: false,
@@ -1002,17 +1064,17 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
     }, "Activating the move icon should reveal and focus the existing move controls.");
     const insideComponentClick = await managerClient.evaluate("(() => { const row=[...document.querySelectorAll('.tab-row')].find((item)=>item.querySelector('.tab-url')?.textContent==="
       + JSON.stringify(qaTabUrl)
-      + "&&item.querySelector('.tab-meta')?.textContent.startsWith('Default · Open')); const panel=row?.querySelector('.tab-move-panel'); panel?.click(); return {expanded:row?.querySelector('.tab-move-toggle')?.getAttribute('aria-expanded'),panelHidden:panel?.hidden,rowMarkedOpen:row?.classList.contains('tab-row-move-open')}; })()");
+      + "); const panel=row?.querySelector('.tab-move-panel'); panel?.click(); return {expanded:row?.querySelector('.tab-move-toggle')?.getAttribute('aria-expanded'),panelHidden:panel?.hidden,rowMarkedOpen:row?.classList.contains('tab-row-move-open')}; })()");
     assert.deepEqual(insideComponentClick, { expanded: "true", panelHidden: false, rowMarkedOpen: true },
       "Clicking a control inside the move component should not dismiss it.");
     const canceledMove = await managerClient.evaluate("(() => { const row=[...document.querySelectorAll('.tab-row')].find((item)=>item.querySelector('.tab-url')?.textContent==="
       + JSON.stringify(qaTabUrl)
-      + "&&item.querySelector('.tab-meta')?.textContent.startsWith('Default · Open')); const toggle=row?.querySelector('.tab-move-toggle'); const panel=row?.querySelector('.tab-move-panel'); [...(panel?.querySelectorAll('button')??[])].find((button)=>button.textContent.trim()==='Cancel')?.click(); return {expanded:toggle?.getAttribute('aria-expanded'),panelHidden:panel?.hidden,rowMarkedOpen:row?.classList.contains('tab-row-move-open'),focusReturned:document.activeElement===toggle}; })()");
+      + "); const toggle=row?.querySelector('.tab-move-toggle'); const panel=row?.querySelector('.tab-move-panel'); [...(panel?.querySelectorAll('button')??[])].find((button)=>button.textContent.trim()==='Cancel')?.click(); return {expanded:toggle?.getAttribute('aria-expanded'),panelHidden:panel?.hidden,rowMarkedOpen:row?.classList.contains('tab-row-move-open'),focusReturned:document.activeElement===toggle}; })()");
     assert.deepEqual(canceledMove, { expanded: "false", panelHidden: true, rowMarkedOpen: false, focusReturned: true },
       "Cancel should close the move component and return focus to its toggle.");
     const outsideClickDismissal = await managerClient.evaluate("(() => { const row=[...document.querySelectorAll('.tab-row')].find((item)=>item.querySelector('.tab-url')?.textContent==="
       + JSON.stringify(qaTabUrl)
-      + "&&item.querySelector('.tab-meta')?.textContent.startsWith('Default · Open')); const toggle=row?.querySelector('.tab-move-toggle'); const panel=row?.querySelector('.tab-move-panel'); toggle?.click(); const opened=!panel?.hidden; document.querySelector('#status')?.click(); return {opened,expanded:toggle?.getAttribute('aria-expanded'),panelHidden:panel?.hidden,rowMarkedOpen:row?.classList.contains('tab-row-move-open')}; })()");
+      + "); const toggle=row?.querySelector('.tab-move-toggle'); const panel=row?.querySelector('.tab-move-panel'); toggle?.click(); const opened=!panel?.hidden; document.querySelector('#status')?.click(); return {opened,expanded:toggle?.getAttribute('aria-expanded'),panelHidden:panel?.hidden,rowMarkedOpen:row?.classList.contains('tab-row-move-open')}; })()");
     assert.deepEqual(outsideClickDismissal, { opened: true, expanded: "false", panelHidden: true, rowMarkedOpen: false },
       "Clicking outside the move component should dismiss it.");
     const dragToCollapsedGroup = await dragTabToGroup(managerClient, {
@@ -1086,7 +1148,7 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
       "Moving a saved tab into the active group should restore it in the browser.");
     await managerClient.evaluate("(() => { const row=[...document.querySelectorAll('.tab-row')].find((item)=>item.querySelector('.tab-url')?.textContent==="
       + JSON.stringify(qaTabUrl)
-      + "&&item.querySelector('.tab-meta')?.textContent.startsWith('Default · Open')); if(!row) throw new Error('QA tab row not found'); const toggle=row.querySelector('.tab-move-toggle'); const panel=row.querySelector('.tab-move-panel'); if(panel.hidden) toggle.click(); const select=panel.querySelector('select'); select.value="
+      + "); if(!row) throw new Error('QA tab row not found'); const toggle=row.querySelector('.tab-move-toggle'); const panel=row.querySelector('.tab-move-panel'); if(panel.hidden) toggle.click(); const select=panel.querySelector('select'); select.value="
       + JSON.stringify(destinationGroup.id)
       + "; panel.querySelector('button').click(); return true; })()");
     const moveStatus = await waitFor(

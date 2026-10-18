@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Add tab favicons, friendlier window labels, and compact selectable URLs to the manager.
 - Drag tabs between workspace groups in the manager.
 - Dismiss the tab move panel on outside click and add a Cancel action.
 - Cap expanded groups at a scrollable height and limit masonry layout to three responsive columns.

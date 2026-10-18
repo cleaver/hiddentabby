@@ -198,7 +198,7 @@ async function refreshAfter(action, successMessage) {
   }
 }
 
-function makeGroupCard(group, index, state) {
+function makeGroupCard(group, index, state, windowLabels) {
   const groupTabs = state.tabs.filter((tab) => tab.groupId === group.id);
   const openCount = groupTabs.filter((tab) => tab.status === "open").length;
   const savedCount = groupTabs.length - openCount;
@@ -348,7 +348,7 @@ function makeGroupCard(group, index, state) {
     a.browserWindowId - b.browserWindowId || a.index - b.index,
   );
   if (orderedTabs.length) {
-    tabList.append(...orderedTabs.map((tab) => makeTabRow(tab, state)));
+    tabList.append(...orderedTabs.map((tab) => makeTabRow(tab, state, windowLabels)));
   } else {
     const empty = document.createElement("p");
     empty.className = "empty-state";
@@ -379,24 +379,50 @@ async function reorderAt(index, offset, state) {
   );
 }
 
-function makeTabRow(tab, state) {
+function makeTabFavicon(tab) {
+  const favicon = document.createElement("span");
+  favicon.className = "tab-favicon";
+  favicon.setAttribute("aria-hidden", "true");
+  if (!tab.faviconUrl) {
+    favicon.classList.add("tab-favicon-placeholder");
+    return favicon;
+  }
+
+  const image = document.createElement("img");
+  image.alt = "";
+  image.src = tab.faviconUrl;
+  image.addEventListener("error", () => {
+    favicon.classList.add("tab-favicon-placeholder");
+    image.remove();
+  }, { once: true });
+  favicon.append(image);
+  return favicon;
+}
+
+function makeTabRow(tab, state, windowLabels) {
   const row = document.createElement("article");
   row.className = "tab-row";
   row.dataset.tabId = tab.id;
   row.draggable = state.groups.length > 1;
   const copy = document.createElement("div");
   copy.className = "tab-copy";
+  const heading = document.createElement("div");
+  heading.className = "tab-heading";
+  heading.append(makeTabFavicon(tab));
   const title = document.createElement("p");
   title.className = "tab-title";
   title.textContent = tab.title || tab.url || "Untitled tab";
+  heading.append(title);
   const url = document.createElement("p");
   url.className = "tab-url";
   url.textContent = tab.url;
-  const group = state.groups.find((candidate) => candidate.id === tab.groupId);
+  url.title = tab.url;
   const meta = document.createElement("p");
   meta.className = "tab-meta";
-  meta.textContent = `${group?.name ?? "Unknown group"} · ${tab.status === "open" ? "Open" : "Saved for restoration"} · window ${tab.browserWindowId}`;
-  copy.append(title, url, meta);
+  meta.textContent = windowLabels.get(tab.windowId)
+    ?? windowLabels.get(tab.browserWindowId)
+    ?? "Window";
+  copy.append(heading, url, meta);
 
   const controls = document.createElement("div");
   controls.className = "tab-actions";
@@ -488,9 +514,15 @@ async function loadState() {
   try {
     const state = await command("state:get");
     const orderedGroups = [...state.groups].sort((a, b) => a.order - b.order);
+    const windowLabels = new Map();
+    state.windows.forEach((window, index) => {
+      const label = `Window #${index + 1}`;
+      windowLabels.set(window.id, label);
+      windowLabels.set(window.browserWindowId, label);
+    });
     groupsElement.replaceChildren(
       ...orderedGroups.map((group, index) =>
-        makeGroupCard(group, index, state),
+        makeGroupCard(group, index, state, windowLabels),
       ),
     );
     setStatus(
