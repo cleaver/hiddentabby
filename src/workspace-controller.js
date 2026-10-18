@@ -988,7 +988,6 @@ export class WorkspaceController {
     }
 
     for (const window of state.windows.filter((item) => item.isOpen)) {
-      if (closeWindowIds.has(window.browserWindowId)) continue;
       const liveWindow = liveWindows.find((item) => item.id === window.browserWindowId);
       const hasDestinationRecords = state.tabs.some((tab) => tab.groupId === destinationGroupId
         && tab.windowId === window.id && isMeaningfulTab(tab, this.#browser.isPlaceholderUrl));
@@ -1002,6 +1001,8 @@ export class WorkspaceController {
       const willCloseWindow = liveWindow && remainingTabs.length === 0
         && closeRecords.some((tab) => tab.browserWindowId === window.browserWindowId);
       const needsContinuityPlaceholder = placeholderWindowIds.has(window.browserWindowId);
+      // Keep the window alive while removing its last group tab. Chrome can
+      // emit windows.onRemoved before the explicit close is journaled below.
       if (!hasPinnedTabs && (willCloseWindow || needsContinuityPlaceholder)
         && window.placeholderTabId === null) {
         try {

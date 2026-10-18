@@ -33,6 +33,7 @@ const colorValues = {
   cyan: "#51d4dc",
   orange: "#ffa45d",
 };
+let stateLoadGeneration = 0;
 
 async function command(type, values = {}) {
   const response = await chrome.runtime.sendMessage({ type, ...values });
@@ -538,9 +539,11 @@ function makeTabRow(tab, state, windowLabels) {
   return row;
 }
 
-async function loadState() {
+async function loadState({ preserveStatus = false } = {}) {
+  const generation = ++stateLoadGeneration;
   try {
     const state = await command("state:get");
+    if (generation !== stateLoadGeneration) return;
     const orderedGroups = [...state.groups].sort((a, b) => a.order - b.order);
     const windowLabels = new Map();
     state.windows.forEach((window, index) => {
@@ -553,10 +556,13 @@ async function loadState() {
         makeGroupCard(group, index, state, windowLabels),
       ),
     );
-    setStatus(
-      "Tab titles and URLs stay in this browser profile; HiddenTabby does not upload them to an external service.",
-    );
+    if (!preserveStatus) {
+      setStatus(
+        "Tab titles and URLs stay in this browser profile; HiddenTabby does not upload them to an external service.",
+      );
+    }
   } catch (error) {
+    if (generation !== stateLoadGeneration) return;
     const groupsEmpty = document.createElement("p");
     groupsEmpty.className = "empty-state";
     groupsEmpty.textContent =
@@ -565,6 +571,12 @@ async function loadState() {
     setStatus(error.message, "error");
   }
 }
+
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName === "local" && changes["hiddentabby.state"]) {
+    void loadState({ preserveStatus: true });
+  }
+});
 
 createForm.addEventListener("submit", async (event) => {
   event.preventDefault();

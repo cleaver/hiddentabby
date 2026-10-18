@@ -1147,6 +1147,13 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
     );
     assert.ok(restoredByDrop.tabs.find((tab) => tab.id === moveTarget.recordId)?.browserTabId,
       "Moving a saved tab into the active group should restore it in the browser.");
+    await waitFor(
+      () => managerClient.evaluate("document.querySelector("
+        + JSON.stringify(`[data-tab-id="${moveTarget.recordId}"]`)
+        + ")?.closest('.group-card')?.dataset.groupId ?? null"),
+      (groupId) => groupId === defaultGroup.id,
+      "manager reflects the restored tab before moving it again",
+    );
     await managerClient.evaluate("(() => { const row=[...document.querySelectorAll('.tab-row')].find((item)=>item.querySelector('.tab-url')?.textContent==="
       + JSON.stringify(qaTabUrl)
       + "); if(!row) throw new Error('QA tab row not found'); const toggle=row.querySelector('.tab-move-toggle'); const panel=row.querySelector('.tab-move-panel'); if(panel.hidden) toggle.click(); const select=panel.querySelector('select'); select.value="
@@ -1852,6 +1859,8 @@ test("packaged group state survives a browser restart", { timeout: 90000 }, asyn
       && tab.status === "closed").length, expectedPopupRestoreIds.length);
     actionPopupPage.close();
     await currentBrowser.client.send("Target.closeTarget", { targetId: actionPopupTarget.id }).catch(() => undefined);
+    await waitFor(async () => !((await browserTargets(currentBrowser.endpointUrl))
+      .some((target) => target.id === actionPopupTarget.id)), Boolean, "first action popup target closed");
     await actionPopupWorker.evaluate(
       "chrome.action.openPopup({windowId:" + actionPopupWindowId + "}).then(()=>true)",
     );
@@ -2197,6 +2206,405 @@ test("incognito-enabled HiddenTabby leaves private tabs outside its state", { ti
   } finally {
     popupClient?.close();
     await closeBrowser(currentBrowser);
+    try {
+      await rm(temporaryRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    } catch (cleanupError) {
+      if (!testError) throw cleanupError;
+    }
+  }
+});
+
+test("workspace manager pages track windows opened or detached after load", { timeout: 90000 }, async (t) => {
+  assert.ok(process.platform === "linux", "The installed-browser E2E harness currently targets Linux.");
+
+  const temporaryRoot = await mkdtemp(join(tmpdir(), "hiddentabby-window-sync-e2e-"));
+  const extensionDirectory = join(temporaryRoot, "extension");
+  const profileDirectory = join(temporaryRoot, "profile");
+  const browserClients = [];
+  let browserProcess;
+  let browserExit;
+  let fixtureServer;
+  let testError;
+
+  try {
+    execFileSync("unzip", ["-q", archive, "-d", extensionDirectory], { stdio: "inherit" });
+    browserProcess = spawn(browserPath, [
+      "--headless=new",
+      "--no-sandbox",
+      "--disable-dev-shm-usage",
+      "--disable-crash-reporter",
+      "--disable-breakpad",
+      "--no-first-run",
+      "--no-default-browser-check",
+      "--user-data-dir=" + profileDirectory,
+      "--remote-debugging-port=0",
+      "--remote-allow-origins=*",
+      "--disable-extensions-except=" + extensionDirectory,
+      "--load-extension=" + extensionDirectory,
+      "about:blank",
+    ], { detached: true, stdio: "ignore" });
+    browserExit = new Promise((resolveExit) => browserProcess.once("exit", resolveExit));
+
+    const endpoint = await waitFor(async () => {
+      try {
+        const portLine = (await readFile(join(profileDirectory, "DevToolsActivePort"), "utf8")).split(/\r?\n/)[0];
+        const port = Number(portLine);
+        const version = await (await fetch("http://127.0.0.1:" + port + "/json/version")).json();
+        return { port, version };
+      } catch {
+        if (browserProcess.exitCode !== null) throw new Error("Browser exited before DevTools started.");
+        return null;
+      }
+    }, Boolean, "browser DevTools endpoint", browserStartupTimeout);
+    const endpointUrl = "http://127.0.0.1:" + endpoint.port;
+    const browserClient = await DevToolsClient.connect(endpoint.version.webSocketDebuggerUrl);
+    browserClients.push(browserClient);
+    const extensionId = await findExtensionId(profileDirectory, endpointUrl);
+    const firstManager = await openExtensionPage(browserClient, endpointUrl, extensionId, "manager.html");
+    browserClients.push(firstManager.client);
+    const firstWindowId = await firstManager.client.evaluate("chrome.tabs.getCurrent().then((tab) => tab.windowId)");
+    await waitFor(() => readState(firstManager.client), (state) => state.groups?.length > 0,
+      "first manager state");
+
+    const secondManagerUrl = `chrome-extension://${extensionId}/manager.html?window-sync=${Date.now()}`;
+    const secondManagerWindow = await firstManager.client.evaluate(
+      "chrome.windows.create({url:" + JSON.stringify(secondManagerUrl) + ",focused:false})"
+        + ".then((window)=>({windowId:window.id,tabId:window.tabs?.[0]?.id}))",
+    );
+    const secondManagerTarget = await waitFor(async () => (await browserTargets(endpointUrl))
+      .find((target) => target.type === "page" && target.url === secondManagerUrl) ?? null,
+    Boolean, "second manager in a separate browser window");
+    const secondManagerClient = await DevToolsClient.connect(secondManagerTarget.webSocketDebuggerUrl);
+    browserClients.push(secondManagerClient);
+    await waitFor(() => secondManagerClient.evaluate("document.readyState"),
+      (value) => value === "complete", "second manager load");
+    await waitFor(() => readState(secondManagerClient),
+      (state) => state.tabs.some((tab) => tab.browserTabId === secondManagerWindow.tabId),
+      "second manager tab adoption");
+    const popupPage = await openExtensionPage(browserClient, endpointUrl, extensionId, "popup.html");
+    browserClients.push(popupPage.client);
+    await waitFor(() => popupPage.client.evaluate("document.readyState"),
+      (value) => value === "complete", "popup page load");
+
+    // Ctrl+N opens a normal window with a browser New Tab page; navigating it
+    // to real content should add that window and tab to the active group.
+    const ctrlNWindow = await firstManager.client.evaluate(
+      "chrome.windows.create({focused:false}).then((window)=>({windowId:window.id,tabId:window.tabs?.[0]?.id}))",
+    );
+    await waitFor(() => readState(firstManager.client),
+      (state) => state.windows.some((window) => window.browserWindowId === ctrlNWindow.windowId && window.isOpen),
+      "Ctrl+N window registration");
+    const ctrlNUrl = "data:text/html,<title>Ctrl N Window Probe</title><h1>Ctrl N Window Probe</h1>";
+    await firstManager.client.evaluate(
+      "chrome.tabs.update(" + ctrlNWindow.tabId + ", {url:" + JSON.stringify(ctrlNUrl) + "})",
+    );
+    const ctrlNState = await waitFor(() => readState(firstManager.client),
+      (state) => state.tabs.some((tab) => tab.browserTabId === ctrlNWindow.tabId
+        && tab.groupId === state.activeGroupId && tab.status === "open"),
+      "Ctrl+N tab assigned to active group");
+    const ctrlNRecord = ctrlNState.tabs.find((tab) => tab.browserTabId === ctrlNWindow.tabId);
+
+    // Moving a live tab across windows exercises the browser's detach/attach
+    // sequence used when a tab is dragged out of its original window.
+    const detachedDestination = await firstManager.client.evaluate(
+      "chrome.windows.create({focused:false}).then((window)=>({windowId:window.id,tabId:window.tabs?.[0]?.id}))",
+    );
+    const detachedSource = await firstManager.client.evaluate(
+      "chrome.tabs.create({windowId:" + firstWindowId
+        + ",url:'data:text/html,<title>Detached Window Probe</title>',active:false})"
+        + ".then((tab)=>({tabId:tab.id,windowId:tab.windowId}))",
+    );
+    await waitFor(() => readState(firstManager.client),
+      (state) => state.tabs.some((tab) => tab.browserTabId === detachedSource.tabId),
+      "tab before detach");
+    await firstManager.client.evaluate(
+      "chrome.tabs.move(" + detachedSource.tabId + ", {windowId:" + detachedDestination.windowId + ",index:-1})",
+    );
+    const detachedState = await waitFor(() => readState(firstManager.client),
+      (state) => state.tabs.some((tab) => tab.browserTabId === detachedSource.tabId
+        && tab.browserWindowId === detachedDestination.windowId),
+      "tab association after detach/attach");
+    const authoritativeViews = await Promise.all([firstManager.client, secondManagerClient].map(readState));
+    assert.ok(authoritativeViews.every((state) => state.tabs.some((tab) => tab.id === ctrlNRecord.id)
+      && state.tabs.some((tab) => tab.browserTabId === detachedSource.tabId
+        && tab.browserWindowId === detachedDestination.windowId)),
+    "Both manager pages should read the same persisted group/window assignments.");
+
+    const viewEvidence = await Promise.all([firstManager.client, secondManagerClient].map((client) =>
+      client.evaluate("({ctrlNRendered:Boolean(document.querySelector('[data-tab-id=\\\""
+        + ctrlNRecord.id
+        + "\\\"]')),detachedRendered:Boolean(document.querySelector('[data-tab-id=\\\""
+        + detachedState.tabs.find((tab) => tab.browserTabId === detachedSource.tabId).id
+        + "\\\"]'))})")));
+    t.diagnostic("Window tracking state: " + JSON.stringify({
+      ctrlNWindowId: ctrlNWindow.windowId,
+      ctrlNRecord: { id: ctrlNRecord.id, browserWindowId: ctrlNRecord.browserWindowId, groupId: ctrlNRecord.groupId },
+      detachedWindowId: detachedDestination.windowId,
+      detachedRecord: detachedState.tabs.find((tab) => tab.browserTabId === detachedSource.tabId),
+      managerViews: viewEvidence,
+      popupWindowCount: await popupPage.client.evaluate("document.querySelector('#window-count')?.textContent"),
+      expectedPopupWindowCount: `${detachedState.windows.filter((window) => window.isOpen).length} windows`,
+    }));
+    assert.ok(viewEvidence.every((view) => view.ctrlNRendered && view.detachedRendered),
+      "Every open Workspace Manager should reflect new and detached group tabs without reloading.");
+    assert.equal(
+      await popupPage.client.evaluate("document.querySelector('#window-count')?.textContent"),
+      `${detachedState.windows.filter((window) => window.isOpen).length} windows`,
+      "The popup window count should track state changes while it remains open.",
+    );
+  } catch (error) {
+    testError = error;
+    throw error;
+  } finally {
+    for (const client of browserClients) client.close();
+    if (browserProcess && browserProcess.exitCode === null) {
+      try {
+        process.kill(-browserProcess.pid, "SIGTERM");
+      } catch {
+        browserProcess.kill("SIGTERM");
+      }
+      await Promise.race([browserExit, wait(3000)]);
+      if (browserProcess.exitCode === null) {
+        try {
+          process.kill(-browserProcess.pid, "SIGKILL");
+        } catch {
+          browserProcess.kill("SIGKILL");
+        }
+        await browserExit;
+      }
+    }
+    try {
+      await rm(temporaryRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    } catch (cleanupError) {
+      if (!testError) throw cleanupError;
+    }
+  }
+});
+
+test("a window added to an inactive group returns on the next group switch", { timeout: 90000 }, async (t) => {
+  assert.ok(process.platform === "linux", "The installed-browser E2E harness currently targets Linux.");
+
+  const temporaryRoot = await mkdtemp(join(tmpdir(), "hiddentabby-group-window-e2e-"));
+  const extensionDirectory = join(temporaryRoot, "extension");
+  const profileDirectory = join(temporaryRoot, "profile");
+  const browserClients = [];
+  let browserProcess;
+  let browserExit;
+  let fixtureServer;
+  let testError;
+
+  try {
+    execFileSync("unzip", ["-q", archive, "-d", extensionDirectory], { stdio: "inherit" });
+    fixtureServer = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+      response.end("<!doctype html><title>Second Group Window Site</title><main>Second group</main>");
+    });
+    await new Promise((resolveListen, rejectListen) => {
+      fixtureServer.once("error", rejectListen);
+      fixtureServer.listen(0, "127.0.0.1", resolveListen);
+    });
+    fixtureServer.unref();
+    const siteUrl = "http://127.0.0.1:" + fixtureServer.address().port + "/second-group-window";
+    browserProcess = spawn(browserPath, [
+      "--headless=new",
+      "--no-sandbox",
+      "--disable-dev-shm-usage",
+      "--disable-crash-reporter",
+      "--disable-breakpad",
+      "--no-first-run",
+      "--no-default-browser-check",
+      "--user-data-dir=" + profileDirectory,
+      "--remote-debugging-port=0",
+      "--remote-allow-origins=*",
+      "--disable-extensions-except=" + extensionDirectory,
+      "--load-extension=" + extensionDirectory,
+      "about:blank",
+    ], { detached: true, stdio: "ignore" });
+    browserExit = new Promise((resolveExit) => browserProcess.once("exit", resolveExit));
+
+    const endpoint = await waitFor(async () => {
+      try {
+        const portLine = (await readFile(join(profileDirectory, "DevToolsActivePort"), "utf8")).split(/\r?\n/)[0];
+        const port = Number(portLine);
+        const version = await (await fetch("http://127.0.0.1:" + port + "/json/version")).json();
+        return { port, version };
+      } catch {
+        if (browserProcess.exitCode !== null) throw new Error("Browser exited before DevTools started.");
+        return null;
+      }
+    }, Boolean, "browser DevTools endpoint", browserStartupTimeout);
+    const endpointUrl = "http://127.0.0.1:" + endpoint.port;
+    const browserClient = await DevToolsClient.connect(endpoint.version.webSocketDebuggerUrl);
+    browserClients.push(browserClient);
+    const extensionId = await findExtensionId(profileDirectory, endpointUrl);
+    const control = await openExtensionPage(browserClient, endpointUrl, extensionId, "popup.html");
+    browserClients.push(control.client);
+    const initialState = await waitFor(() => readState(control.client),
+      (state) => state.groups?.length === 1, "first-run Default group");
+    const defaultGroup = initialState.groups[0];
+    const controllerTab = await control.client.evaluate(
+      "chrome.tabs.getCurrent().then((tab)=>({id:tab.id,windowId:tab.windowId}))",
+    );
+    await control.client.evaluate("chrome.tabs.update(" + controllerTab.id + ", {pinned:true})");
+    await waitFor(() => readState(control.client),
+      (state) => state.windows.some((window) => window.pinnedTabIds.includes(controllerTab.id)),
+      "pin the command page so it survives group switching");
+    const defaultTab = await control.client.evaluate(
+      "chrome.tabs.create({windowId:" + controllerTab.windowId
+        + ",url:'data:text/html,<title>Default Group Anchor</title>',active:false})"
+        + ".then((tab)=>({id:tab.id,url:tab.url}))",
+    );
+    await waitFor(() => readState(control.client),
+      (state) => state.tabs.some((tab) => tab.browserTabId === defaultTab.id
+        && tab.groupId === defaultGroup.id && tab.status === "open"),
+      "Default group anchor tab");
+
+    const createdGroup = await control.client.evaluate(
+      "chrome.runtime.sendMessage({type:'group:create',details:{name:'Second'}})",
+    );
+    assert.equal(createdGroup.ok, true, createdGroup.error);
+    const secondGroupId = createdGroup.value.groups.find((group) => group.name === "Second").id;
+    const firstSwitch = await control.client.evaluate(
+      "chrome.runtime.sendMessage({type:'group:switch',groupId:" + JSON.stringify(secondGroupId) + "})",
+    );
+    assert.equal(firstSwitch.ok, true, firstSwitch.error);
+    assert.equal(firstSwitch.value.state.activeGroupId, secondGroupId);
+
+    // Ctrl+N creates a normal window whose new-tab page is then navigated to a
+    // real site, matching the user's scenario rather than an empty placeholder.
+    const addedWindow = await control.client.evaluate(
+      "chrome.windows.create({focused:false}).then((window)=>({windowId:window.id,tabId:window.tabs?.[0]?.id}))",
+    );
+    assert.ok(Number.isInteger(addedWindow.tabId),
+      "Chrome should return the new-tab ID for the Ctrl+N-style window: " + JSON.stringify(addedWindow));
+    const navigationResult = await control.client.evaluate(
+      "chrome.tabs.update(" + addedWindow.tabId + ", {url:" + JSON.stringify(siteUrl) + "})",
+    );
+    const liveNewTab = await control.client.evaluate(
+      "chrome.tabs.get(" + addedWindow.tabId + ").then((tab)=>({id:tab.id,windowId:tab.windowId,url:tab.url,pendingUrl:tab.pendingUrl}))",
+    );
+    t.diagnostic("Ctrl+N navigation: " + JSON.stringify({ addedWindow, navigationResult, liveNewTab, siteUrl }));
+    await waitFor(() => control.client.evaluate("chrome.tabs.get(" + addedWindow.tabId
+      + ").then((tab)=>tab.url)") , (url) => url === siteUrl, "Ctrl+N site navigation commit");
+    const beforeSwitch = await waitFor(() => readState(control.client),
+      (state) => state.tabs.some((tab) => tab.browserTabId === addedWindow.tabId
+        && tab.groupId === secondGroupId && tab.status === "open" && tab.url === siteUrl),
+      "new site recorded in the active second group");
+    const addedRecord = beforeSwitch.tabs.find((tab) => tab.browserTabId === addedWindow.tabId);
+    const originalLogicalWindowId = addedRecord.windowId;
+    const originalWindow = beforeSwitch.windows.find((window) => window.id === originalLogicalWindowId);
+    assert.equal(addedRecord.browserWindowId, addedWindow.windowId,
+      "The new tab must initially point to its real browser window.");
+    assert.equal(originalWindow?.browserWindowId, addedWindow.windowId,
+      "The new tab's logical window record must point to its browser window.");
+
+    await control.client.evaluate(`(() => {
+      window.__groupWindowSwitchTrace = [];
+      chrome.tabs.onRemoved.addListener((tabId, info) => window.__groupWindowSwitchTrace.push({
+        event: "tab-removed", tabId, windowId: info.windowId, isWindowClosing: info.isWindowClosing,
+      }));
+      chrome.windows.onRemoved.addListener((windowId) => window.__groupWindowSwitchTrace.push({
+        event: "window-removed", windowId,
+      }));
+      chrome.storage.onChanged.addListener((changes, area) => {
+        const state = area === "local" ? changes["hiddentabby.state"]?.newValue : null;
+        if (!state) return;
+        const operation = state.operations?.find((item) => item.type === "switch-group");
+        const record = state.tabs?.find((tab) => tab.id === ${JSON.stringify(addedRecord.id)});
+        const logicalWindow = state.windows?.find((item) => item.id === ${JSON.stringify(originalLogicalWindowId)});
+        window.__groupWindowSwitchTrace.push({
+          event: "state", activeGroupId: state.activeGroupId, status: record?.status ?? "missing",
+          logicalWindowOpen: logicalWindow?.isOpen,
+          closeWindowIds: operation?.payload.closeWindowIds,
+          windowCloseStartedIds: operation?.payload.windowCloseStartedIds,
+        });
+      });
+    })()`);
+
+    const switchToDefault = await control.client.evaluate(
+      "chrome.runtime.sendMessage({type:'group:switch',groupId:" + JSON.stringify(defaultGroup.id) + "})",
+    );
+    assert.equal(switchToDefault.ok, true, switchToDefault.error);
+    const immediateState = await readState(control.client);
+    const switchTrace = await control.client.evaluate("window.__groupWindowSwitchTrace");
+    t.diagnostic("Switch-away evidence: " + JSON.stringify({
+      activeGroupId: immediateState.activeGroupId,
+      tabRecord: immediateState.tabs.find((tab) => tab.id === addedRecord.id),
+      logicalWindow: immediateState.windows.find((window) => window.id === originalLogicalWindowId),
+      browserWindowExists: await control.client.evaluate("chrome.windows.get(" + addedWindow.windowId
+        + ").then(()=>true,()=>false)"),
+      switchTrace,
+    }));
+    const intentionalCloseCheckpointIndex = switchTrace.findIndex((event) => event.event === "state"
+      && event.windowCloseStartedIds?.includes(addedWindow.windowId));
+    const windowRemovedEventIndex = switchTrace.findIndex((event) => event.event === "window-removed"
+      && event.windowId === addedWindow.windowId);
+    assert.ok(intentionalCloseCheckpointIndex >= 0 && windowRemovedEventIndex > intentionalCloseCheckpointIndex,
+      "Chrome must not close the group window until HiddenTabby has checkpointed the intentional close.");
+    const afterSwitchAway = await waitFor(() => readState(control.client),
+      (state) => state.activeGroupId === defaultGroup.id
+        && state.tabs.some((tab) => tab.id === addedRecord.id && tab.status === "closed"),
+      "new group tab saved when switching to Default");
+    const dormantWindow = afterSwitchAway.windows.find((window) => window.id === originalLogicalWindowId);
+    t.diagnostic("After switching away: " + JSON.stringify({
+      record: afterSwitchAway.tabs.find((tab) => tab.id === addedRecord.id),
+      logicalWindow: dormantWindow,
+      operation: afterSwitchAway.operations.at(-1),
+      browserWindowIds: (await control.client.evaluate(
+        "chrome.windows.getAll({windowTypes:['normal']}).then((windows)=>windows.map((window)=>window.id))",
+      )),
+    }));
+    assert.equal(dormantWindow?.isOpen, false,
+      "The second group's additional window should close while Default is active.");
+
+    const switchBack = await control.client.evaluate(
+      "chrome.runtime.sendMessage({type:'group:switch',groupId:" + JSON.stringify(secondGroupId) + "})",
+    );
+    assert.equal(switchBack.ok, true, switchBack.error);
+    const afterSwitchBack = await waitFor(() => readState(control.client),
+      (state) => state.activeGroupId === secondGroupId
+        && state.tabs.some((tab) => tab.id === addedRecord.id && tab.status === "open"),
+      "second group tab restored after switching back");
+    const restoredRecord = afterSwitchBack.tabs.find((tab) => tab.id === addedRecord.id);
+    const restoredWindow = afterSwitchBack.windows.find((window) => window.id === originalLogicalWindowId);
+    const visibleSiteTabs = await control.client.evaluate(
+      "chrome.tabs.query({}).then((tabs)=>tabs.filter((tab)=>tab.url === " + JSON.stringify(siteUrl)
+        + ").map((tab)=>({id:tab.id,windowId:tab.windowId,url:tab.url})))",
+    );
+    t.diagnostic("After switching back: " + JSON.stringify({
+      record: restoredRecord,
+      logicalWindow: restoredWindow,
+      visibleSiteTabs,
+      switchFailures: switchBack.value.failures,
+    }));
+    assert.ok(restoredWindow?.isOpen, "The logical window must be open again for its group.");
+    assert.equal(restoredRecord.browserWindowId, restoredWindow.browserWindowId,
+      "The restored tab and logical window should have the same current browser window ID.");
+    assert.equal(visibleSiteTabs.length, 1, "The group site should be restored exactly once.");
+    assert.equal(visibleSiteTabs[0].windowId, restoredWindow.browserWindowId,
+      "The site should be restored into its original logical window.");
+  } catch (error) {
+    testError = error;
+    throw error;
+  } finally {
+    if (fixtureServer) await new Promise((resolveClose) => fixtureServer.close(resolveClose));
+    for (const client of browserClients) client.close();
+    if (browserProcess && browserProcess.exitCode === null) {
+      try {
+        process.kill(-browserProcess.pid, "SIGTERM");
+      } catch {
+        browserProcess.kill("SIGTERM");
+      }
+      await Promise.race([browserExit, wait(3000)]);
+      if (browserProcess.exitCode === null) {
+        try {
+          process.kill(-browserProcess.pid, "SIGKILL");
+        } catch {
+          browserProcess.kill("SIGKILL");
+        }
+        await browserExit;
+      }
+    }
     try {
       await rm(temporaryRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
     } catch (cleanupError) {

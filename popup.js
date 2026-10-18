@@ -4,6 +4,7 @@ const windowCountElement = document.querySelector("#window-count");
 const createForm = document.querySelector("#create-form");
 const nameInput = document.querySelector("#group-name");
 const sidePanelButton = document.querySelector("#open-side-panel");
+let stateLoadGeneration = 0;
 
 async function sendCommand(type, values = {}) {
   const response = await chrome.runtime.sendMessage({ type, ...values });
@@ -54,23 +55,34 @@ function makeGroupButton(group, state) {
   return button;
 }
 
-async function loadState() {
-  groupsElement.replaceChildren();
+async function loadState({ preserveStatus = false } = {}) {
+  const generation = ++stateLoadGeneration;
   try {
     const state = await sendCommand("state:get");
+    if (generation !== stateLoadGeneration) return;
     const orderedGroups = [...state.groups].sort((a, b) => a.order - b.order);
+    groupsElement.replaceChildren();
     for (const group of orderedGroups) groupsElement.append(makeGroupButton(group, state));
     const openWindows = state.windows.filter((window) => window.isOpen).length;
     windowCountElement.textContent = `${openWindows} window${openWindows === 1 ? "" : "s"}`;
-    setStatus("Switching closes tabs in other groups. Page state may not survive restoration.");
+    if (!preserveStatus) {
+      setStatus("Switching closes tabs in other groups. Page state may not survive restoration.");
+    }
   } catch (error) {
+    if (generation !== stateLoadGeneration) return;
     const empty = document.createElement("p");
     empty.className = "empty-state";
     empty.textContent = "Groups could not be loaded. Reload the extension and try again.";
-    groupsElement.append(empty);
+    groupsElement.replaceChildren(empty);
     setStatus(error.message, "error");
   }
 }
+
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName === "local" && changes["hiddentabby.state"]) {
+    void loadState({ preserveStatus: true });
+  }
+});
 
 createForm.addEventListener("submit", async (event) => {
   event.preventDefault();
