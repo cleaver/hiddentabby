@@ -199,7 +199,7 @@ async function refreshAfter(action, successMessage) {
   }
 }
 
-function makeGroupCard(group, index, state, windowLabels) {
+function makeGroupCard(group, index, state, windowLabels, managerTabContext) {
   const groupTabs = state.tabs.filter((tab) => tab.groupId === group.id);
   const openCount = groupTabs.filter((tab) => tab.status === "open").length;
   const savedCount = groupTabs.length - openCount;
@@ -349,7 +349,7 @@ function makeGroupCard(group, index, state, windowLabels) {
     a.browserWindowId - b.browserWindowId || a.index - b.index,
   );
   if (orderedTabs.length) {
-    tabList.append(...orderedTabs.map((tab) => makeTabRow(tab, state, windowLabels)));
+    tabList.append(...orderedTabs.map((tab) => makeTabRow(tab, state, windowLabels, managerTabContext)));
   } else {
     const empty = document.createElement("p");
     empty.className = "empty-state";
@@ -400,7 +400,7 @@ function makeTabFavicon(tab) {
   return favicon;
 }
 
-function makeTabRow(tab, state, windowLabels) {
+function makeTabRow(tab, state, windowLabels, managerTabContext) {
   const row = document.createElement("article");
   row.className = "tab-row";
   row.dataset.tabId = tab.id;
@@ -507,6 +507,9 @@ function makeTabRow(tab, state, windowLabels) {
   moveIcon.append(folderPath, arrowPath);
   moveToggle.append(moveIcon);
 
+  const isProtectedManagerTab = managerTabContext?.isOnlyTab === true
+    && tab.status === "open"
+    && tab.browserTabId === managerTabContext.tabId;
   const deleteButton = makeButton(
     "",
     "danger tab-action-icon-button tab-delete-button",
@@ -517,13 +520,19 @@ function makeTabRow(tab, state, windowLabels) {
         "Tab removed from group.",
       );
     },
+    isProtectedManagerTab,
   );
   deleteButton.setAttribute(
     "aria-label",
-    `Delete ${tab.title || tab.url || "tab"} from group`,
+    isProtectedManagerTab
+      ? "Cannot delete the Workspace Manager because it is the only tab in this window"
+      : `Delete ${tab.title || tab.url || "tab"} from group`,
   );
-  deleteButton.setAttribute("title", "Delete tab from group");
-  deleteButton.dataset.tooltip = "Delete tab from group";
+  const deleteTooltip = isProtectedManagerTab
+    ? "The only Workspace Manager tab in this window cannot be deleted"
+    : "Delete tab from group";
+  deleteButton.setAttribute("title", deleteTooltip);
+  deleteButton.dataset.tooltip = deleteTooltip;
   const deleteIcon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   deleteIcon.setAttribute("class", "tab-delete-icon");
   deleteIcon.setAttribute("viewBox", "0 0 24 24");
@@ -542,7 +551,10 @@ function makeTabRow(tab, state, windowLabels) {
 async function loadState({ preserveStatus = false } = {}) {
   const generation = ++stateLoadGeneration;
   try {
-    const state = await command("state:get");
+    const [state, managerTabContext] = await Promise.all([
+      command("state:get"),
+      getManagerTabContext(),
+    ]);
     if (generation !== stateLoadGeneration) return;
     const orderedGroups = [...state.groups].sort((a, b) => a.order - b.order);
     const windowLabels = new Map();
@@ -553,7 +565,7 @@ async function loadState({ preserveStatus = false } = {}) {
     });
     groupsElement.replaceChildren(
       ...orderedGroups.map((group, index) =>
-        makeGroupCard(group, index, state, windowLabels),
+        makeGroupCard(group, index, state, windowLabels, managerTabContext),
       ),
     );
     if (!preserveStatus) {
@@ -569,6 +581,20 @@ async function loadState({ preserveStatus = false } = {}) {
       "Groups could not be loaded. Reload the extension and try again.";
     groupsElement.replaceChildren(groupsEmpty);
     setStatus(error.message, "error");
+  }
+}
+
+async function getManagerTabContext() {
+  try {
+    const current = await chrome.tabs.getCurrent();
+    const managerUrl = chrome.runtime.getURL("manager.html");
+    if (!Number.isInteger(current?.id)
+      || !Number.isInteger(current.windowId)
+      || !current.url?.startsWith(managerUrl)) return null;
+    const tabs = await chrome.tabs.query({ windowId: current.windowId });
+    return { tabId: current.id, isOnlyTab: tabs.length === 1 };
+  } catch {
+    return null;
   }
 }
 

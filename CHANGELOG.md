@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Close a browser window when Workspace Manager deletes its final live tab, while protecting a full-page manager tab that is the only tab in its window.
+
 ## 0.2.0 — 2026-10-18
 
 - Preserve saved tabs when Chrome auto-closes a workspace-only window as its last tab is removed during switching.

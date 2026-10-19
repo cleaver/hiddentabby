@@ -1,6 +1,6 @@
 # HiddenTabby Requirements
 
-**Status:** Core requirements agreed and implemented. Chromium/Brave acceptance evidence is recorded in `task_plan.md` and `progress.md`.
+**Status:** Core requirements agreed and implemented. Chromium/Brave acceptance evidence is recorded in the archived lifecycle plan and current E2E tests.
 
 ## Goal
 
@@ -11,7 +11,7 @@ Build one Manifest V3 extension for Chrome and Brave that brings the main tab-or
 - Create, rename, reorder, color, and delete named groups.
 - Keep at least one group named `Default`. Deleting a group closes all its member tabs across windows and removes its saved group/tab records. Show a confirmation warning with the group name and number of tabs that will close; this does not erase browser history. Never reassign or restore tabs closed by group deletion.
 - Add the current tab to a group and move existing tabs between groups.
-- Manage every unpinned tab in a group; keep pinned tabs pinned and outside groups. Exception: if a window has no tabs in the active group, keep it open with a temporary, ungrouped New Tab placeholder. Assign that tab to the active group if the user navigates it; remove the placeholder when a group tab is restored to the window.
+- Manage every unpinned tab in a group; keep pinned tabs pinned and outside groups. During a group switch, if a window has no tabs in the selected group, keep it open with a temporary, ungrouped New Tab placeholder. Assign that tab to the active group if the user navigates it; remove the placeholder when a group tab is restored to the window. Workspace Manager tab deletion follows the separate window-close rule below.
 - On first run, create a `Default` group and assign all currently open unpinned tabs across normal windows to it, replacing any existing native group assignments for those tabs.
 - Assign newly opened unpinned tabs to the currently active group. Creating a new group from the popup must not activate it.
 - Add a tab-strip right-click action to move the clicked tab into another group. Moving it to an inactive group closes/saves it immediately and does not switch the active group.
@@ -45,6 +45,14 @@ Search and keyboard navigation, drag-and-drop, group sorting, JSON backup and re
 ## Deletion and Active Group Behavior
 
 - When deleting the active group, switch all windows to `Default`. If deletion would leave no `Default` group, create a fresh, empty `Default`; if it would leave no groups, this is the new sole group. Tabs from the deleted group remain closed and are not added to the replacement group.
+
+## Workspace Manager Tab Deletion
+
+- Deleting an open tab in the Workspace Manager closes and permanently removes that tab. If it was the last browser tab in its normal window, close that window instead of creating a HiddenTabby placeholder. Any other live tab, including a pinned tab, keeps the window open; pinned tabs remain untouched.
+- If the full-page Workspace Manager tab is the only tab in its window, disable its own Delete button so the user cannot close the manager out from under themselves. The service worker must also reject a stale delete request if the tab/window state changes after the UI was rendered.
+- The side panel is not a browser tab; if its host window loses its last tab, the window and side panel close together.
+- Deleting a saved tab from an inactive group removes only that saved record and does not close a live window. Deleted tabs must not return on a later group switch; preserve unrelated saved tabs in other groups even if they refer to the same logical window.
+- This rule applies only to the Workspace Manager Delete action. Group switching continues to use temporary placeholders for browser continuity, and closing tabs from the browser tab strip follows the browser's normal window-close behavior.
 
 ## Data, Privacy, and Compatibility
 

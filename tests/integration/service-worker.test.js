@@ -75,6 +75,35 @@ test("service worker dispatches a tab deletion command by tab ID", async () => {
   assert.deepEqual(responses, [{ ok: true, value: { name: "deleteTab", args: ["saved-record-1"] } }]);
 });
 
+test("service worker identifies a full-page manager tab for its final-tab guard", async () => {
+  const { chrome, calls } = setup();
+  const managerUrl = "chrome-extension://extension-id/manager.html";
+  const [accepted] = chrome.runtime.onMessage.fire(
+    { type: "tab:delete", tabId: 42 },
+    { url: managerUrl, tab: { id: 42, url: managerUrl } },
+    () => {},
+  );
+
+  assert.equal(accepted, true);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(calls, [["deleteTab", 42, { managerTabId: 42 }]]);
+});
+
+test("service worker does not treat a side-panel host tab as the manager tab", async () => {
+  const { chrome, calls } = setup();
+  const [accepted] = chrome.runtime.onMessage.fire(
+    { type: "tab:delete", tabId: 42 },
+    { url: "chrome-extension://extension-id/manager.html", tab: { id: 42, url: "https://host.example/" } },
+    () => {},
+  );
+
+  assert.equal(accepted, true);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(calls, [["deleteTab", 42]]);
+});
+
 test("Brave Container settings command opens the fixed browser settings page", async () => {
   const { chrome } = setup();
   const createdTabs = [];

@@ -1423,10 +1423,8 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
     const afterActiveTabDelete = await waitFor(
       () => readState(popup.client),
       (state) => !state.tabs.some((tab) => tab.id === secondTabRecord.id)
-        && state.operations.length === 0
-        && (state.windows.find((window) => window.id === activeDeleteRecord.windowId)?.pinnedTabIds.length > 0
-          || Number.isInteger(state.windows.find((window) => window.id === activeDeleteRecord.windowId)?.placeholderTabId)),
-      "delete the active tab and preserve its empty window",
+        && state.operations.length === 0,
+      "delete the active tab without restoring it",
     );
     assert.ok(afterActiveTabDelete.groups.some((group) => group.id === defaultGroup.id),
       "Deleting an active tab must leave the workspace intact.");
@@ -2286,6 +2284,56 @@ test("workspace manager pages track windows opened or detached after load", { ti
     await waitFor(() => readState(secondManagerClient),
       (state) => state.tabs.some((tab) => tab.browserTabId === secondManagerWindow.tabId),
       "second manager tab adoption");
+    const soleManagerDeleteState = await secondManagerClient.evaluate(`(async () => {
+      const state = (await chrome.runtime.sendMessage({type:'state:get'})).value;
+      const record = state.tabs.find((tab) => tab.browserTabId === ${secondManagerWindow.tabId});
+      const row = record && document.querySelector('.tab-row[data-tab-id="' + record.id + '"]');
+      const button = row?.querySelector('.tab-delete-button');
+      return { rowFound: Boolean(row), disabled: button?.disabled ?? false,
+        label: button?.getAttribute('aria-label'), title: button?.getAttribute('title') };
+    })()`);
+    assert.equal(soleManagerDeleteState.rowFound, true,
+      "The manager should render its own tab in the active group.");
+    assert.equal(soleManagerDeleteState.disabled, true,
+      "The only full-page Workspace Manager tab should not be deletable from itself.");
+    assert.match(soleManagerDeleteState.label, /only tab in this window/i,
+      "The disabled Delete button should explain why it cannot be used to assist screen-reader users.");
+    assert.match(soleManagerDeleteState.title, /cannot be deleted/i,
+      "The disabled Delete button should explain the restriction in its tooltip.");
+    const refusedManagerDelete = await secondManagerClient.evaluate(
+      "chrome.runtime.sendMessage({type:'tab:delete',tabId:" + secondManagerWindow.tabId + "})",
+    );
+    assert.equal(refusedManagerDelete.ok, false,
+      "The service worker should reject stale delete requests for the manager's only tab.");
+    assert.match(refusedManagerDelete.error, /only tab containing the Workspace Manager/i);
+    assert.equal((await readState(secondManagerClient)).tabs.some((tab) => tab.browserTabId === secondManagerWindow.tabId), true,
+      "The protected manager tab should remain in its workspace.");
+    const finalTabWindow = await firstManager.client.evaluate(
+      "chrome.windows.create({url:'data:text/html,<title>Final Tab Window</title>',focused:false})"
+        + ".then((window)=>({windowId:window.id,tabId:window.tabs?.[0]?.id}))",
+    );
+    const finalWindowTabState = await waitFor(() => readState(firstManager.client),
+      (state) => state.tabs.some((tab) => tab.browserTabId === finalTabWindow.tabId && tab.status === "open"),
+      "single-tab window adoption");
+    const finalWindowRecord = finalWindowTabState.tabs.find((tab) => tab.browserTabId === finalTabWindow.tabId);
+    await waitFor(() => secondManagerClient.evaluate(`(() => {
+      const row = document.querySelector('.tab-row[data-tab-id="${finalWindowRecord.id}"]');
+      return Boolean(row && !row.querySelector('.tab-delete-button')?.disabled);
+    })()`), Boolean, "manager delete control for another window's final tab");
+    await secondManagerClient.evaluate(`(() => {
+      const button = document.querySelector('.tab-row[data-tab-id="${finalWindowRecord.id}"] .tab-delete-button');
+      if (!button) throw new Error('Final-window tab delete button not found');
+      button.click();
+      return true;
+    })()`);
+    await waitFor(async () => {
+      const windows = await firstManager.client.evaluate("chrome.windows.getAll({windowTypes:['normal']}).then((items)=>items.map((item)=>item.id))");
+      const state = await readState(firstManager.client);
+      return { windowClosed: !windows.includes(finalTabWindow.windowId),
+        tabForgotten: !state.tabs.some((tab) => tab.id === finalWindowRecord.id),
+        operations: state.operations.length };
+    }, (result) => result.windowClosed && result.tabForgotten && result.operations === 0,
+    "Workspace Manager deletion closes a window's final browser tab");
     const popupPage = await openExtensionPage(browserClient, endpointUrl, extensionId, "popup.html");
     browserClients.push(popupPage.client);
     await waitFor(() => popupPage.client.evaluate("document.readyState"),
@@ -2604,7 +2652,6 @@ test("a window added to an inactive group returns on the next group switch", { t
     testError = error;
     throw error;
   } finally {
-    if (fixtureServer) await new Promise((resolveClose) => fixtureServer.close(resolveClose));
     for (const client of browserClients) client.close();
     if (browserProcess && browserProcess.exitCode === null) {
       try {
@@ -2622,6 +2669,7 @@ test("a window added to an inactive group returns on the next group switch", { t
         await browserExit;
       }
     }
+    if (fixtureServer) await new Promise((resolveClose) => fixtureServer.close(resolveClose));
     try {
       await rm(temporaryRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
     } catch (cleanupError) {

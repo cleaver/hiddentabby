@@ -154,8 +154,23 @@ export class WorkspaceController {
     return { ...operation.result, state: operation.state };
   }
 
-  async deleteTab(tabId) {
+  async deleteTab(tabId, { managerTabId = null } = {}) {
     await this.initialize();
+    if (Number.isInteger(managerTabId)) {
+      const state = this.#store.snapshot();
+      const managerRecord = state.tabs.find((tab) => tab.browserTabId === managerTabId
+        && tab.status === "open");
+      const targetsManagerTab = managerRecord
+        && (tabId === managerTabId || tabId === managerRecord.id);
+      if (targetsManagerTab) {
+        const window = (await this.#browser.getNormalWindows())
+          .find((candidate) => candidate.id === managerRecord.browserWindowId);
+        const liveTabs = (window?.tabs ?? []).filter((tab) => !tab.incognito);
+        if (liveTabs.length === 1 && liveTabs[0].id === managerTabId) {
+          throw new Error("Cannot delete the only tab containing the Workspace Manager.");
+        }
+      }
+    }
     if (this.#store.snapshot().operations.length) {
       await this.#store.resumePending(this.#recoveryHandlers());
     }
@@ -843,30 +858,6 @@ export class WorkspaceController {
     const deletedRecord = payload.deletedRecords?.[0];
     if (!deletedRecord) return { deleted: false };
     let state = initialState;
-    const logicalWindow = state.windows.find((window) => window.id === deletedRecord.windowId);
-    const activeTabsRemain = state.tabs.some((tab) => tab.groupId === state.activeGroupId
-      && tab.windowId === deletedRecord.windowId && tab.status === "open");
-    const liveWindow = logicalWindow?.isOpen
-      ? (await this.#browser.getNormalWindows()).find((window) => window.id === logicalWindow.browserWindowId)
-      : null;
-    const hasPinnedTabs = (logicalWindow?.pinnedTabIds ?? []).length > 0
-      || (liveWindow?.tabs ?? []).some((tab) => tab.pinned && !tab.incognito);
-    if (logicalWindow?.isOpen && logicalWindow.placeholderTabId === null
-      && !activeTabsRemain && !hasPinnedTabs) {
-      try {
-        const placeholder = await this.#browser.createPlaceholder(
-          logicalWindow.browserWindowId,
-          logicalWindow.id,
-        );
-        state = await checkpoint((current) => setWindowPlaceholder(
-          current,
-          logicalWindow.browserWindowId,
-          placeholder.id,
-        ));
-      } catch (error) {
-        throw new Error(`Could not preserve window ${logicalWindow.browserWindowId}: ${error.message}`, { cause: error });
-      }
-    }
 
     let closeRecords = payload.closeRecords ?? [deletedRecord];
     let closingTabIds = new Set(payload.closingTabIds ?? []);

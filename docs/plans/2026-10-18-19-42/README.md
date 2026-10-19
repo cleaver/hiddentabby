@@ -19,3 +19,7 @@ The plan records 119 passing unit tests, packaged Chromium and Brave E2E runs, J
 - `929276c` — retain snapshots on group close
 
 The original plan, findings, and progress logs are preserved alongside this README.
+
+## Later requirement update
+
+The archived plan's rule to avoid closing a blank window while the user is working in it described the original switching and placeholder behavior. The current Workspace Manager deletion contract is now in `REQUIREMENTS.md` and `docs/architecture.md`: deleting the final live tab closes its window, while group switching still retains its temporary placeholder behavior.

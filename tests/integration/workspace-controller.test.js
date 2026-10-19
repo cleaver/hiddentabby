@@ -46,6 +46,11 @@ function browserHarness(windows) {
     async removeTabs(ids) {
       calls.push(["remove", ids]);
       for (const window of windows) window.tabs = (window.tabs ?? []).filter((tab) => !ids.includes(tab.id));
+      for (let index = windows.length - 1; index >= 0; index -= 1) {
+        if (windows[index].type === "normal" && !windows[index].incognito && windows[index].tabs.length === 0) {
+          windows.splice(index, 1);
+        }
+      }
     },
     async removeWindow(windowId) {
       calls.push(["removeWindow", windowId]);
@@ -1992,7 +1997,7 @@ test("moving the last active tab leaves an ungrouped placeholder in the window",
   assert.equal(moved.activeGroupId, state.activeGroupId);
 });
 
-test("deleting an active tab closes and forgets it and leaves an empty-window placeholder", async () => {
+test("deleting a window's final tab closes the window instead of adding a placeholder", async () => {
   const window = normalWindow();
   window.tabs = window.tabs.filter((tab) => !tab.pinned);
   const { controller, calls, browser } = setup([window]);
@@ -2000,17 +2005,86 @@ test("deleting an active tab closes and forgets it and leaves an empty-window pl
   const record = initial.tabs.find((tab) => tab.browserTabId === 101);
 
   const deleted = await controller.deleteTab(101);
+  await controller.onWindowRemoved(10);
+  const finalState = await controller.getState();
 
-  assert.equal(deleted.tabs.some((tab) => tab.id === record.id), false);
-  assert.equal(deleted.groups.some((group) => group.id === initial.activeGroupId), true,
+  assert.equal(finalState.tabs.some((tab) => tab.id === record.id), false);
+  assert.equal(finalState.groups.some((group) => group.id === initial.activeGroupId), true,
     "Removing a tab must not remove its workspace.");
-  assert.equal(deleted.activeGroupId, initial.activeGroupId);
+  assert.equal(finalState.activeGroupId, initial.activeGroupId);
   assert.deepEqual(calls.filter(([name]) => name === "remove").flatMap(([, ids]) => ids), [101]);
   assert.equal((await browser.getTab(101)), undefined,
     "Deleting a tab from the active group must close its live browser tab.");
-  assert.equal(Number.isInteger(deleted.windows[0].placeholderTabId), true,
-    "An open window emptied by tab deletion should receive the standard placeholder.");
+  assert.equal((await browser.getNormalWindows()).some((candidate) => candidate.id === 10), false,
+    "Removing a window's final tab should close the physical browser window.");
+  const logicalWindow = finalState.windows.find((candidate) => candidate.browserWindowId === 10);
+  assert.ok(!logicalWindow || !logicalWindow.isOpen,
+    "A deleted empty physical window should no longer be marked open.");
+  assert.equal(logicalWindow?.placeholderTabId ?? null, null);
+  assert.equal(calls.some(([name]) => name === "placeholder"), false);
   assert.equal(deleted.operations.length, 0);
+});
+
+test("deleting the final managed tab leaves an unrelated live tab and creates no placeholder", async () => {
+  const window = normalWindow();
+  window.tabs = window.tabs.filter((tab) => !tab.pinned);
+  const { controller, browser, calls } = setup([window]);
+  const initial = await controller.getState();
+  const managedTab = initial.tabs[0];
+  window.tabs.push({ id: 199, windowId: 10, index: 1, url: "chrome://settings/", title: "Settings" });
+
+  await controller.deleteTab(managedTab.browserTabId);
+
+  assert.equal((await browser.getTab(199))?.url, "chrome://settings/");
+  assert.equal((await browser.getNormalWindows()).some((candidate) => candidate.id === 10), true);
+  assert.equal(calls.some(([name]) => name === "placeholder"), false,
+    "A different live tab keeps the window usable without an extension placeholder.");
+});
+
+test("closing a deleted tab's window preserves another group's saved tabs for that window", async () => {
+  const targetWindow = normalWindow(10);
+  targetWindow.tabs = targetWindow.tabs.filter((tab) => !tab.pinned);
+  targetWindow.tabs.push({ id: 103, windowId: 10, index: 1, groupId: 4, url: "https://saved.example", title: "Saved" });
+  const { controller, store, browser } = setup([targetWindow, normalWindow(20)]);
+  const initial = await controller.getState();
+  const activeTab = initial.tabs.find((tab) => tab.browserTabId === 101);
+  const savedTab = initial.tabs.find((tab) => tab.browserTabId === 103);
+  let laterGroupId;
+  await store.update((state) => {
+    const next = createGroup(state, { name: "Later" });
+    laterGroupId = next.groups.find((group) => group.name === "Later").id;
+    return next;
+  });
+
+  await controller.moveTab(savedTab.browserTabId, laterGroupId);
+  await controller.deleteTab(activeTab.browserTabId);
+  await controller.onWindowRemoved(10);
+
+  const finalState = await controller.getState();
+  assert.equal(finalState.tabs.some((tab) => tab.id === activeTab.id), false,
+    "The explicitly deleted active tab must be forgotten permanently.");
+  const preservedSnapshot = finalState.tabs.find((tab) => tab.id === savedTab.id);
+  assert.equal(preservedSnapshot?.groupId, laterGroupId);
+  assert.equal(preservedSnapshot?.status, "closed");
+  assert.equal(finalState.windows.find((window) => window.id === savedTab.windowId)?.isOpen, false);
+  assert.equal((await browser.getNormalWindows()).some((window) => window.id === 10), false);
+});
+
+test("the only full-page Workspace Manager tab cannot be deleted from itself", async () => {
+  const window = normalWindow();
+  window.tabs = [{ ...window.tabs[0], url: "chrome-extension://test/manager.html", title: "Workspace Manager" }];
+  const { controller, browser, calls } = setup([window]);
+  const initial = await controller.getState();
+  const managerTab = initial.tabs[0];
+
+  await assert.rejects(
+    controller.deleteTab(managerTab.browserTabId, { managerTabId: managerTab.browserTabId }),
+    /only tab containing the Workspace Manager/i,
+  );
+
+  assert.equal((await browser.getTab(managerTab.browserTabId))?.url, "chrome-extension://test/manager.html");
+  assert.equal((await controller.getState()).tabs.some((tab) => tab.id === managerTab.id), true);
+  assert.equal(calls.some(([name]) => name === "remove" || name === "placeholder"), false);
 });
 
 test("deleting a saved tab removes only its snapshot and keeps its inactive group", async () => {
@@ -2061,13 +2135,16 @@ test("failed tab deletion is recovered without re-adopting the live tab", async 
     createInitialState: createInitialStateFactory(first.browser),
   });
   const restarted = new WorkspaceController({ store: restartedStore, browser: first.browser });
-  const recovered = await restarted.getState();
+  let recovered = await restarted.getState();
+  await restarted.onWindowRemoved(10);
+  recovered = await restarted.getState();
 
   assert.equal(recovered.tabs.some((tab) => tab.id === record.id), false);
   assert.equal(recovered.tabs.some((tab) => tab.url === record.url), false);
   assert.equal(recovered.operations.length, 0);
   assert.equal(await first.browser.getTab(101), undefined);
-  assert.equal(Number.isInteger(recovered.windows[0].placeholderTabId), true);
+  assert.equal(recovered.windows.some((window) => window.isOpen && window.placeholderTabId !== null), false,
+    "Deleting the window's final tab must not recreate it with a placeholder after recovery.");
 });
 
 test("deleting the active group closes its tabs and activates an empty Default", async () => {
@@ -2095,7 +2172,7 @@ test("deleting the active group closes its tabs and activates an empty Default",
   assert.equal(result.state.windows[0].placeholderTabId, null);
 });
 
-test("deleting the active group closes extra placeholder windows when pinned windows remain", async () => {
+test("deleting the final tab from a secondary window closes it while pinned windows remain", async () => {
   const windows = [normalWindow(10), normalWindow(20)];
   windows[1].tabs = windows[1].tabs.filter((tab) => !tab.pinned);
   const { controller, browser, store } = setup(windows);
@@ -2104,8 +2181,11 @@ test("deleting the active group closes extra placeholder windows when pinned win
   const defaultId = initial.activeGroupId;
 
   await controller.deleteTab(extraWindowTab.id);
-  assert.equal(store.snapshot().windows.find((window) => window.browserWindowId === 20).placeholderTabId !== null, true,
-    "Deleting the only unpinned tab leaves its window usable until the group changes.");
+  await controller.onWindowRemoved(20);
+  assert.equal(windows.some((window) => window.id === 20), false,
+    "Deleting the final tab from the secondary window closes that window immediately.");
+  assert.equal(store.snapshot().windows.some((window) => window.browserWindowId === 20 && window.isOpen), false,
+    "The deleted empty window must not remain marked open.");
 
   const deleted = await controller.deleteGroup(defaultId);
   assert.equal(deleted.state.groups.length, 1);

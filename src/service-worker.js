@@ -35,6 +35,9 @@ export function registerServiceWorker(chromeApi, controller) {
   });
   chromeApi.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (!message || typeof message !== "object" || typeof message.type !== "string") return false;
+    const isFullPageManagerSender = typeof sender?.url === "string"
+      && sender.tab?.url === sender.url
+      && /^chrome-extension:\/\/[^/]+\/manager\.html(?:[?#]|$)/.test(sender.url);
     const commands = {
       "state:get": () => controller.getState(),
       "group:create": () => controller.createGroup(message.details),
@@ -44,7 +47,9 @@ export function registerServiceWorker(chromeApi, controller) {
       "group:delete": () => controller.deleteGroup(message.groupId),
       "group:switch": () => controller.switchGroup(message.groupId),
       "tab:move": () => controller.moveTab(message.tabId, message.groupId),
-      "tab:delete": () => controller.deleteTab(message.tabId),
+      "tab:delete": () => isFullPageManagerSender
+        ? controller.deleteTab(message.tabId, { managerTabId: sender.tab.id })
+        : controller.deleteTab(message.tabId),
       "brave:containers:open-settings": () => chromeApi.tabs.create({ url: "brave://settings/braveContent" }),
     };
     const command = commands[message.type];
