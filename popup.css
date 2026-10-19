@@ -97,6 +97,7 @@ h1 {
 
 .groups {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 6px;
   max-height: 300px;
   overflow-y: auto;
