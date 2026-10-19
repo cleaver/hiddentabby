@@ -2566,16 +2566,28 @@ test("a window added to an inactive group returns on the next group switch", { t
       "chrome.runtime.sendMessage({type:'group:switch',groupId:" + JSON.stringify(secondGroupId) + "})",
     );
     assert.equal(switchBack.ok, true, switchBack.error);
-    const afterSwitchBack = await waitFor(() => readState(control.client),
-      (state) => state.activeGroupId === secondGroupId
-        && state.tabs.some((tab) => tab.id === addedRecord.id && tab.status === "open"),
-      "second group tab restored after switching back");
-    const restoredRecord = afterSwitchBack.tabs.find((tab) => tab.id === addedRecord.id);
-    const restoredWindow = afterSwitchBack.windows.find((window) => window.id === originalLogicalWindowId);
-    const visibleSiteTabs = await control.client.evaluate(
-      "chrome.tabs.query({}).then((tabs)=>tabs.filter((tab)=>tab.url === " + JSON.stringify(siteUrl)
-        + ").map((tab)=>({id:tab.id,windowId:tab.windowId,url:tab.url})))",
-    );
+    const afterSwitchBack = await waitFor(async () => {
+      const [state, liveTabs] = await Promise.all([
+        readState(control.client),
+        control.client.evaluate(
+          "chrome.tabs.query({}).then((tabs)=>tabs.map((tab)=>({id:tab.id,windowId:tab.windowId,url:tab.url})))",
+        ),
+      ]);
+      return { state, liveTabs };
+    }, ({ state, liveTabs }) => {
+      const record = state.tabs.find((tab) => tab.id === addedRecord.id);
+      const logicalWindow = state.windows.find((window) => window.id === originalLogicalWindowId);
+      return state.activeGroupId === secondGroupId
+        && record?.status === "open"
+        && record.windowId === originalLogicalWindowId
+        && logicalWindow?.isOpen
+        && record.browserWindowId === logicalWindow.browserWindowId
+        && liveTabs.some((tab) => tab.id === record.browserTabId
+          && tab.windowId === logicalWindow.browserWindowId && tab.url === siteUrl);
+    }, "second group tab and logical window restored consistently", 30000);
+    const restoredRecord = afterSwitchBack.state.tabs.find((tab) => tab.id === addedRecord.id);
+    const restoredWindow = afterSwitchBack.state.windows.find((window) => window.id === originalLogicalWindowId);
+    const visibleSiteTabs = afterSwitchBack.liveTabs.filter((tab) => tab.url === siteUrl);
     t.diagnostic("After switching back: " + JSON.stringify({
       record: restoredRecord,
       logicalWindow: restoredWindow,
