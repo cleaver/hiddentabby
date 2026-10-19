@@ -1299,13 +1299,18 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
       () => managerAgainClient.evaluate(`(() => {
         const image = document.querySelector(".brand-mark img");
         const rect = image.getBoundingClientRect();
+        const managerStylesheet = [...document.styleSheets]
+          .find((stylesheet) => stylesheet.href?.endsWith("/manager.css"));
+        let managerStylesLoaded = false;
+        try { managerStylesLoaded = Boolean(managerStylesheet?.cssRules.length); } catch {}
         return { complete: image.complete, naturalWidth: image.naturalWidth,
-          cssWidth: rect.width, devicePixelRatio: window.devicePixelRatio };
+          cssWidth: rect.width, devicePixelRatio: window.devicePixelRatio, managerStylesLoaded };
       })()`),
-      (image) => image.complete && image.naturalWidth > 0,
+      (image) => image.complete && image.naturalWidth > 0 && image.managerStylesLoaded,
       "high-resolution manager logo image",
     );
     assert.equal(retinaLogo.complete, true, "The high-resolution manager logo should load.");
+    assert.equal(retinaLogo.managerStylesLoaded, true, "The manager stylesheet should load before measuring the logo.");
     assert.equal(retinaLogo.devicePixelRatio, 2);
     assert.ok(retinaLogo.naturalWidth >= retinaLogo.cssWidth * retinaLogo.devicePixelRatio,
       "The manager logo should provide at least one source pixel per rendered retina pixel: "

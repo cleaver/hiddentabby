@@ -8,6 +8,7 @@ import test from "node:test";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const browserPath = process.env.BROWSER_BIN || "/usr/bin/chromium";
+const browserStartupTimeout = 60_000;
 const wait = (milliseconds) => new Promise((resolveWait) => setTimeout(resolveWait, milliseconds));
 
 class DevToolsClient {
@@ -86,7 +87,7 @@ async function browserTargets(endpoint) {
   return (await (await fetch(endpoint + "/json/list")).json());
 }
 
-test("popup group rows truncate long names without horizontal overflow", { timeout: 60000 }, async () => {
+test("popup group rows truncate long names without horizontal overflow", { timeout: 120000 }, async () => {
   assert.equal(process.platform, "linux", "This focused browser test currently targets Linux.");
   const profileDirectory = await mkdtemp(join(tmpdir(), "hiddentabby-popup-layout-"));
   let browserProcess;
@@ -115,7 +116,7 @@ test("popup group rows truncate long names without horizontal overflow", { timeo
     const port = await waitFor(async () => {
       const value = Number((await readFile(join(profileDirectory, "DevToolsActivePort"), "utf8")).split(/\r?\n/)[0]);
       return Number.isInteger(value) && value > 0 ? value : null;
-    }, Boolean, "browser DevTools port");
+    }, Boolean, "browser DevTools port", browserStartupTimeout);
     const endpoint = "http://127.0.0.1:" + port;
     const version = await waitFor(async () => {
       try {
@@ -123,7 +124,7 @@ test("popup group rows truncate long names without horizontal overflow", { timeo
       } catch {
         return null;
       }
-    }, Boolean, "browser DevTools endpoint");
+    }, Boolean, "browser DevTools endpoint", browserStartupTimeout);
     browserClient = await DevToolsClient.connect(version.webSocketDebuggerUrl);
     const extensionWorker = await waitFor(async () => (await browserTargets(endpoint))
       .find((target) => target.type === "service_worker" && target.url.includes("/src/service-worker.js")),
