@@ -33,7 +33,14 @@ const colorValues = {
   cyan: "#51d4dc",
   orange: "#ffa45d",
 };
+const tabEditLockErrorMessage =
+  "Tabs cannot be edited right now (user may be dragging a tab).";
+const stateLoadRetryDelayMs = 400;
 let stateLoadGeneration = 0;
+let activeStateLoad = null;
+let automaticTabEditRetryBlocked = false;
+let queuedStorageRefresh = false;
+let retryDelayPending = false;
 
 async function command(type, values = {}) {
   const response = await chrome.runtime.sendMessage({ type, ...values });
@@ -191,7 +198,7 @@ async function refreshAfter(action, successMessage) {
     const result = await action();
     if (result?.failures?.length) setStatus(result.failures.join(" "), "error");
     else if (successMessage) setStatus(successMessage, "success");
-    await loadState();
+    await loadState({ supersede: true });
     if (result?.failures?.length) setStatus(result.failures.join(" "), "error");
     else if (successMessage) setStatus(successMessage, "success");
   } catch (error) {
@@ -548,39 +555,94 @@ function makeTabRow(tab, state, windowLabels, managerTabContext) {
   return row;
 }
 
-async function loadState({ preserveStatus = false } = {}) {
+async function loadState({
+  preserveStatus = false,
+  manualRetry = false,
+  supersede = false,
+} = {}) {
+  if (activeStateLoad && !supersede) {
+    if (preserveStatus && !retryDelayPending) queuedStorageRefresh = true;
+    return activeStateLoad;
+  }
+  if (supersede) {
+    queuedStorageRefresh = false;
+    retryDelayPending = false;
+  }
+  if (manualRetry) automaticTabEditRetryBlocked = false;
+
   const generation = ++stateLoadGeneration;
-  try {
-    const [state, managerTabContext] = await Promise.all([
-      command("state:get"),
-      getManagerTabContext(),
-    ]);
-    if (generation !== stateLoadGeneration) return;
-    const orderedGroups = [...state.groups].sort((a, b) => a.order - b.order);
-    const windowLabels = new Map();
-    state.windows.forEach((window, index) => {
-      const label = `Window #${index + 1}`;
-      windowLabels.set(window.id, label);
-      windowLabels.set(window.browserWindowId, label);
-    });
-    groupsElement.replaceChildren(
-      ...orderedGroups.map((group, index) =>
-        makeGroupCard(group, index, state, windowLabels, managerTabContext),
-      ),
-    );
-    if (!preserveStatus) {
-      setStatus(
-        "Tab titles and URLs stay in this browser profile; HiddenTabby does not upload them to an external service.",
+  let waitedForTabEditLock = false;
+  let loadSucceeded = false;
+  const request = (async function readAndRender(retriesRemaining) {
+    try {
+      const [state, managerTabContext] = await Promise.all([
+        command("state:get"),
+        getManagerTabContext(),
+      ]);
+      if (generation !== stateLoadGeneration) return;
+      const orderedGroups = [...state.groups].sort((a, b) => a.order - b.order);
+      const windowLabels = new Map();
+      state.windows.forEach((window, index) => {
+        const label = `Window #${index + 1}`;
+        windowLabels.set(window.id, label);
+        windowLabels.set(window.browserWindowId, label);
+      });
+      groupsElement.replaceChildren(
+        ...orderedGroups.map((group, index) =>
+          makeGroupCard(group, index, state, windowLabels, managerTabContext),
+        ),
       );
+      automaticTabEditRetryBlocked = false;
+      loadSucceeded = true;
+      if (!preserveStatus || waitedForTabEditLock) {
+        setStatus(
+          "Tab titles and URLs stay in this browser profile; HiddenTabby does not upload them to an external service.",
+        );
+      }
+    } catch (error) {
+      if (generation !== stateLoadGeneration) return;
+      if (retriesRemaining > 0 && !automaticTabEditRetryBlocked
+        && error.message === tabEditLockErrorMessage) {
+        queuedStorageRefresh = false;
+        automaticTabEditRetryBlocked = true;
+        waitedForTabEditLock = true;
+        retryDelayPending = true;
+        setStatus("Waiting for tab changes to finish…");
+        await new Promise((resolveRetry) => setTimeout(resolveRetry, stateLoadRetryDelayMs));
+        if (generation !== stateLoadGeneration) return;
+        retryDelayPending = false;
+        return readAndRender(retriesRemaining - 1);
+      }
+      queuedStorageRefresh = false;
+      const groupsEmpty = document.createElement("div");
+      groupsEmpty.className = "empty-state";
+      const message = document.createElement("p");
+      message.textContent = "Groups could not be loaded. Try again.";
+      const retryButton = makeButton("Reload groups", "secondary", () => {
+        retryButton.disabled = true;
+        setStatus("Reloading groups…");
+        void loadState({ manualRetry: true });
+      });
+      retryButton.setAttribute("aria-label", "Reload workspace groups");
+      groupsEmpty.append(message, retryButton);
+      groupsElement.replaceChildren(groupsEmpty);
+      setStatus(error.message, "error");
     }
-  } catch (error) {
-    if (generation !== stateLoadGeneration) return;
-    const groupsEmpty = document.createElement("p");
-    groupsEmpty.className = "empty-state";
-    groupsEmpty.textContent =
-      "Groups could not be loaded. Reload the extension and try again.";
-    groupsElement.replaceChildren(groupsEmpty);
-    setStatus(error.message, "error");
+  })(1);
+
+  activeStateLoad = request;
+  try {
+    return await request;
+  } finally {
+    if (activeStateLoad === request) {
+      activeStateLoad = null;
+      if (queuedStorageRefresh && loadSucceeded) {
+        queuedStorageRefresh = false;
+        void loadState({ preserveStatus: true });
+      } else {
+        queuedStorageRefresh = false;
+      }
+    }
   }
 }
 

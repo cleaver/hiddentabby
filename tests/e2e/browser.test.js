@@ -782,6 +782,170 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
       (count) => count > 0,
       "workspace manager group cards rendered",
     );
+    const retryLoadInjection = await managerClient.evaluate(`(async () => {
+      const storageKey = "hiddentabby.state";
+      const stored = await chrome.storage.local.get(storageKey);
+      const originalState = stored[storageKey];
+      const originalDescriptor = Object.getOwnPropertyDescriptor(chrome.runtime, "sendMessage");
+      const sendMessage = chrome.runtime.sendMessage.bind(chrome.runtime);
+      let failureScenario = null;
+      const wrappedSendMessage = (message, ...args) => {
+        if (message?.type === "state:get" && failureScenario) {
+          failureScenario.attempts += 1;
+          failureScenario.attemptTimes.push(Date.now());
+          if (failureScenario.failuresRemaining > 0) {
+            failureScenario.failuresRemaining -= 1;
+            if (failureScenario.changeStorageDuringRetry && failureScenario.attempts === 1) {
+              setTimeout(() => {
+                void chrome.storage.local.set({
+                  [storageKey]: { ...originalState, retryProbe: Date.now() },
+                });
+              }, 100);
+            }
+            return Promise.reject(new Error(failureScenario.message));
+          }
+        }
+        return sendMessage(message, ...args);
+      };
+      let intercepted = false;
+      try {
+        Object.defineProperty(chrome.runtime, "sendMessage", {
+          configurable: true,
+          writable: true,
+          value: wrappedSendMessage,
+        });
+        intercepted = chrome.runtime.sendMessage === wrappedSendMessage;
+      } catch {}
+      if (!intercepted) return { intercepted: false };
+      window.startLoadFailureScenario = async (
+        message,
+        changeStorageDuringRetry = false,
+        failuresRemaining = 1,
+      ) => {
+        failureScenario = {
+          message,
+          failuresRemaining,
+          attempts: 0,
+          attemptTimes: [],
+          changeStorageDuringRetry,
+        };
+        await chrome.storage.local.set({
+          [storageKey]: { ...originalState, retryProbe: Date.now() },
+        });
+      };
+      window.triggerLoadRefresh = () => chrome.storage.local.set({
+        [storageKey]: { ...originalState, retryProbe: Date.now() },
+      });
+      window.readLoadFailureScenario = () => ({
+        attempts: failureScenario?.attempts,
+        attemptTimes: failureScenario?.attemptTimes,
+      });
+      window.retryAfterLoadError = () => {
+        const button = document.querySelector(".empty-state button");
+        if (!button) return false;
+        button.click();
+        return true;
+      };
+      window.restoreRetryProbe = async () => {
+        await chrome.storage.local.set({ [storageKey]: originalState });
+        if (originalDescriptor) {
+          Object.defineProperty(chrome.runtime, "sendMessage", originalDescriptor);
+        } else {
+          delete chrome.runtime.sendMessage;
+        }
+      };
+      return { intercepted: true };
+    })()`);
+    assert.equal(retryLoadInjection.intercepted, true,
+      "The manager test should be able to inject one transient state-read failure.");
+    const tabEditLockError = "Tabs cannot be edited right now (user may be dragging a tab).";
+    await managerClient.evaluate(`window.startLoadFailureScenario(${JSON.stringify(tabEditLockError)}, true)`);
+    await waitFor(
+      () => managerClient.evaluate(`({
+        groups: document.querySelectorAll(".group-card").length,
+        retry: Boolean(document.querySelector(".empty-state button")),
+        status: document.querySelector("#status")?.textContent,
+        attempts: window.readLoadFailureScenario().attempts
+      })`),
+      (view) => view.groups > 0 && !view.retry && view.attempts === 2
+        && view.status?.startsWith("Tab titles and URLs stay in this browser profile"),
+      "automatic one-time retry after a transient tab-edit lock",
+    );
+    const retryTiming = await managerClient.evaluate("window.readLoadFailureScenario()");
+    assert.ok(retryTiming.attemptTimes[1] - retryTiming.attemptTimes[0] >= 350,
+      "The retry should wait about 400 ms and absorb storage changes during the delay.");
+    await wait(250);
+    assert.equal(await managerClient.evaluate("window.readLoadFailureScenario().attempts"), 2,
+      "A storage event during the retry delay should not start another state read.");
+
+    await managerClient.evaluate(`window.startLoadFailureScenario(${JSON.stringify(tabEditLockError)}, false, 3)`);
+    await waitFor(
+      () => managerClient.evaluate(`({
+        message: document.querySelector(".empty-state")?.textContent,
+        status: document.querySelector("#status")?.textContent,
+        button: document.querySelector(".empty-state button")?.getAttribute("aria-label"),
+        attempts: window.readLoadFailureScenario().attempts
+      })`),
+      (view) => view.message?.includes("Groups could not be loaded")
+        && view.status === tabEditLockError
+        && view.button === "Reload workspace groups"
+        && view.attempts === 2,
+      "manual retry control after the one automatic retry also fails",
+    );
+    await wait(500);
+    assert.equal(await managerClient.evaluate("window.readLoadFailureScenario().attempts"), 2,
+      "A persistent tab-edit lock should stop after one automatic retry.");
+    await managerClient.evaluate("window.triggerLoadRefresh()");
+    await waitFor(
+      () => managerClient.evaluate("window.readLoadFailureScenario().attempts"),
+      (attempts) => attempts === 3,
+      "a later storage-triggered load after the failed retry",
+    );
+    await wait(500);
+    assert.equal(await managerClient.evaluate("window.readLoadFailureScenario().attempts"), 3,
+      "A later storage event should not restart automatic retries until recovery or manual reload.");
+    assert.equal(await managerClient.evaluate("window.retryAfterLoadError()"), true,
+      "Manual reload should be available after the automatic retry is exhausted.");
+    await waitFor(
+      () => managerClient.evaluate(`({
+        groups: document.querySelectorAll(".group-card").length,
+        retry: Boolean(document.querySelector(".empty-state button"))
+      })`),
+      (view) => view.groups > 0 && !view.retry,
+      "manual recovery after the tab-edit lock clears",
+    );
+
+    await managerClient.evaluate(`window.startLoadFailureScenario("Unrelated state read failure")`);
+    await waitFor(
+      () => managerClient.evaluate(`({
+        message: document.querySelector(".empty-state")?.textContent,
+        status: document.querySelector("#status")?.textContent,
+        button: document.querySelector(".empty-state button")?.getAttribute("aria-label")
+      })`),
+      (view) => view.message?.includes("Groups could not be loaded")
+        && view.status === "Unrelated state read failure"
+        && view.button === "Reload workspace groups",
+      "manual retry control for a non-tab-edit state-read failure",
+    );
+    await wait(500);
+    assert.equal(await managerClient.evaluate("window.readLoadFailureScenario().attempts"), 1,
+      "Unrelated errors should not trigger an automatic retry.");
+    assert.equal(await managerClient.evaluate("window.retryAfterLoadError()"), true,
+      "The manual retry control should remain available after an unrelated error.");
+    await waitFor(
+      () => managerClient.evaluate(`({
+        groups: document.querySelectorAll(".group-card").length,
+        retry: Boolean(document.querySelector(".empty-state button"))
+      })`),
+      (view) => view.groups > 0 && !view.retry,
+      "groups restored by the retry control",
+    );
+    await managerClient.evaluate("window.restoreRetryProbe()");
+    await waitFor(
+      () => managerClient.evaluate('document.querySelectorAll(".group-card").length'),
+      (count) => count > 0,
+      "manager state after restoring the test profile",
+    );
     const managerWorkspaceLayout = await managerClient.evaluate(`(async () => {
       const state = (await chrome.runtime.sendMessage({type: "state:get"})).value;
       const cards = [...document.querySelectorAll(".group-card")];

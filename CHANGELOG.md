@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add a Reload groups action when the Workspace Manager cannot load its state.
+- Retry a workspace load once after a brief tab-edit lock, while coalescing storage-triggered refreshes.
 - Close a browser window when Workspace Manager deletes its final live tab, while protecting a full-page manager tab that is the only tab in its window.
 
 ## 0.2.0 — 2026-10-18
