@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 — 2026-10-18
 
 - Preserve saved tabs when Chrome auto-closes a workspace-only window as its last tab is removed during switching.
 - Refresh open popup and manager views when local workspace state changes.
@@ -16,6 +16,7 @@
 - Organize saved and open tabs inside expandable workspace groups in the manager.
 - Show each tab's move controls on demand with an accessible icon button.
 - Float the move selector above tab rows without changing their layout.
+- Prevent long popup group names from creating horizontal overflow.
 
 ## 0.1.5 — 2026-10-16
 
