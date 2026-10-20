@@ -11,3 +11,6 @@ playwright-mcp:
 refresh:
     rm -rf dist/HiddenTabby
     unzip -q dist/HiddenTabby.zip -d dist/HiddenTabby
+
+package:
+    npm run package
