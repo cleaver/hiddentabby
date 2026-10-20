@@ -14,8 +14,12 @@ function event() {
 
 function setup() {
   const storageValues = {};
+  const managerPageCalls = [];
   const chrome = {
-    runtime: { onInstalled: event(), onStartup: event(), onMessage: event() },
+    runtime: {
+      onInstalled: event(), onStartup: event(), onMessage: event(),
+      getURL(path) { return `chrome-extension://test/${path}`; },
+    },
     action: { onUserSettingsChanged: event() },
     storage: {
       local: {
@@ -26,6 +30,7 @@ function setup() {
     windows: { onRemoved: event() },
     tabs: {
       onCreated: event(), onActivated: event(), onUpdated: event(), onRemoved: event(), onAttached: event(), onMoved: event(),
+      async create(properties) { managerPageCalls.push(properties.url); return { id: 1, ...properties }; },
     },
     contextMenus: { onClicked: event() },
   };
@@ -35,8 +40,30 @@ function setup() {
     "moveTab", "deleteTab", "getState", "createGroup", "renameGroup", "recolorGroup", "reorderGroups", "deleteGroup", "switchGroup",
   ].map((name) => [name, (...args) => { calls.push([name, ...args]); return Promise.resolve({ name, args }); }]));
   registerServiceWorker(chrome, controller);
-  return { chrome, calls, storageValues };
+  return { chrome, calls, storageValues, controller, managerPageCalls };
 }
+
+test("service worker opens the Workspace Manager after a fresh install only", async () => {
+  const { chrome, calls, controller, managerPageCalls } = setup();
+  let finishInitialization;
+  controller.initialize = () => {
+    calls.push(["initialize"]);
+    return new Promise((resolve) => { finishInitialization = resolve; });
+  };
+
+  chrome.runtime.onInstalled.fire({ reason: "install" });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(managerPageCalls, [], "The manager should wait for first-run initialization.");
+
+  finishInitialization();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(managerPageCalls, ["chrome-extension://test/manager.html"]);
+
+  chrome.runtime.onInstalled.fire({ reason: "update" });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(managerPageCalls, ["chrome-extension://test/manager.html"], "Updates should not reopen the manager.");
+  assert.deepEqual(calls, [["initialize"], ["initialize"]]);
+});
 
 test("service worker clears the dismissed pin tip when toolbar visibility changes", async () => {
   const { chrome, storageValues } = setup();

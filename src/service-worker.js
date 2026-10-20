@@ -9,12 +9,26 @@ import { createInitialStateFactory, WorkspaceController } from "./workspace-cont
 export function registerServiceWorker(chromeApi, controller) {
   let pinPreferenceUpdate = Promise.resolve();
   const run = (label, operation) => {
-    Promise.resolve(operation).catch((error) => {
+    const task = Promise.resolve(operation);
+    task.catch((error) => {
       console.error(`HiddenTabby ${label} failed:`, error);
     });
+    return task;
   };
 
-  chromeApi.runtime.onInstalled.addListener(() => run("installation", controller.initialize()));
+  chromeApi.runtime.onInstalled.addListener((details) => {
+    const initialization = run("installation", controller.initialize());
+    if (details?.reason !== "install") return;
+
+    void initialization
+      .catch(() => {})
+      .then(() => chromeApi.tabs.create({
+        url: chromeApi.runtime.getURL("manager.html"),
+      }))
+      .catch((error) => {
+        console.error("HiddenTabby first-install manager open failed:", error);
+      });
+  });
   chromeApi.runtime.onStartup.addListener(() => run("startup", controller.initialize()));
   chromeApi.tabs.onCreated.addListener((tab) => run("tab creation", controller.onTabCreated(tab)));
   chromeApi.tabs.onActivated.addListener((activeInfo) => run("tab activation", controller.onTabActivated(activeInfo)));

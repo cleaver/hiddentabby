@@ -47,7 +47,7 @@ class DevToolsClient {
       }, 10000);
       this.pending.set(id, (message) => {
         clearTimeout(timer);
-        if (message.error) rejectMessage(new Error(message.error.message));
+        if (message.error) rejectMessage(new Error(method + " failed: " + message.error.message));
         else resolveMessage(message.result);
       });
     });
@@ -252,8 +252,22 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
     const browserClient = await DevToolsClient.connect(endpoint.version.webSocketDebuggerUrl);
     browserClients.push(browserClient);
     const extensionId = await findExtensionId(profileDirectory, endpointUrl);
+    const installManagerTarget = await waitFor(async () => (await browserTargets(endpointUrl))
+      .find((target) => target.type === "page" && target.url.endsWith("/manager.html")) ?? null,
+    Boolean, "Workspace Manager opened after first installation");
+    const installManagerClient = await DevToolsClient.connect(installManagerTarget.webSocketDebuggerUrl);
+    browserClients.push(installManagerClient);
+    await waitFor(
+      () => installManagerClient.evaluate("document.querySelector('h1')?.textContent ?? null"),
+      (value) => value === "HiddenTabby",
+      "first-install Workspace Manager page load",
+    );
     const popup = await openExtensionPage(browserClient, endpointUrl, extensionId, "popup.html");
     browserClients.push(popup.client);
+    await browserClient.send("Target.closeTarget", { targetId: installManagerTarget.id });
+    await waitFor(async () => !(await browserTargets(endpointUrl))
+      .some((target) => target.id === installManagerTarget.id), Boolean,
+    "remove first-install manager from the browser-test fixture");
 
     const manifest = await popup.client.evaluate("chrome.runtime.getManifest()");
     assert.equal(manifest.name, "HiddenTabby");
@@ -262,7 +276,8 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
 
     const initialState = await waitFor(
       () => readState(popup.client),
-      (state) => state.groups?.some((group) => group.name === "Main"),
+      (state) => state.groups?.some((group) => group.name === "Main")
+        && !state.tabs.some((tab) => tab.url.endsWith("/manager.html")),
       "first-run Main group",
     );
     const persistedState = await popup.client.evaluate("chrome.storage.local.get('hiddentabby.state').then((values)=>values['hiddentabby.state'])");
@@ -286,7 +301,8 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
       type: "mouseReleased", x: managerButtonPoint.x, y: managerButtonPoint.y, button: "left", clickCount: 1,
     });
     const managerTarget = await waitFor(async () => (await browserTargets(endpointUrl))
-      .find((target) => target.type === "page" && target.url.endsWith("/manager.html")) ?? null,
+      .find((target) => target.type === "page" && target.url.endsWith("/manager.html")
+        && target.id !== installManagerTarget.id) ?? null,
     Boolean, "full-page manager opened by the popup action");
     const workspaceManagerClient = await DevToolsClient.connect(managerTarget.webSocketDebuggerUrl);
     browserClients.push(workspaceManagerClient);
@@ -2022,6 +2038,13 @@ test("packaged group state survives a browser restart", { timeout: 90000 }, asyn
     execFileSync("unzip", ["-q", archive, "-d", extensionDirectory], { stdio: "inherit" });
     currentBrowser = await launchBrowser();
     assert.match(currentBrowser.endpoint.version.Browser, /Chrom|Brave/i);
+    const firstInstallManagerTarget = await waitFor(async () => (await browserTargets(currentBrowser.endpointUrl))
+      .find((target) => target.type === "page" && target.url.endsWith("/manager.html")) ?? null,
+    Boolean, "Workspace Manager opened after first installation in restart test");
+    await currentBrowser.client.send("Target.closeTarget", { targetId: firstInstallManagerTarget.id });
+    await waitFor(async () => !(await browserTargets(currentBrowser.endpointUrl))
+      .some((target) => target.id === firstInstallManagerTarget.id), Boolean,
+    "remove first-install manager from the restart-test fixture");
     const initialPopup = await openExtensionPage(
       currentBrowser.client,
       currentBrowser.endpointUrl,
