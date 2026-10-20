@@ -72,7 +72,8 @@ test("first run assigns every normal unpinned tab and excludes pinned and incogn
   ], { createId: idFactory() });
 
   assert.equal(state.groups.length, 1);
-  assert.equal(state.groups[0].name, "Default");
+  assert.equal(state.groups[0].name, "Main");
+  assert.equal(state.defaultGroupId, state.groups[0].id);
   assert.equal(state.tabs.length, 1);
   assert.equal(state.tabs[0].groupId, state.activeGroupId);
   assert.equal(state.tabs[0].windowId, state.windows[0].id);
@@ -108,6 +109,16 @@ test("group creation, rename, recolor, and reordering preserve active group", ()
   assert.throws(() => reorderGroups(reordered, [secondId, secondId]), /exactly once/);
 });
 
+test("the main group can be renamed while retaining its protected identity", () => {
+  const state = createEmptyState({ createId: idFactory() });
+  const renamed = renameGroup(state, state.defaultGroupId, "Personal");
+
+  assert.equal(renamed.groups[0].name, "Personal");
+  assert.equal(renamed.defaultGroupId, state.defaultGroupId);
+  assert.equal(renamed.activeGroupId, state.activeGroupId);
+  assert.throws(() => renameGroup(renamed, state.defaultGroupId, ""), /Enter a group name/);
+});
+
 test("switch plan closes inactive tabs and unused windows while restoring destination tabs", () => {
   const ids = idFactory();
   let state = createFirstRunState([
@@ -128,7 +139,7 @@ test("switch plan closes inactive tabs and unused windows while restoring destin
   assert.deepEqual(plan.placeholderWindowIds, []);
   assert.deepEqual(plan.closeWindowIds, [7]);
   assert.deepEqual(plan.recreateWindowIds, []);
-  assert.equal(plan.state.groups.find((group) => group.id === defaultId).name, "Default");
+  assert.equal(plan.state.groups.find((group) => group.id === defaultId).name, "Main");
 });
 
 test("switch layout reuses a shared destination window and closes unused unpinned windows", () => {
@@ -165,11 +176,11 @@ test("switch layout reuses a shared destination window and closes unused unpinne
         ? { ...tab, browserTabId: 2102, status: "open" }
         : { ...tab, browserTabId: null, status: "closed" }),
   };
-  const backToDefault = planGroupSwitch(afterOneWindow, defaultGroupId);
-  assert.deepEqual(backToDefault.recreateWindowIds, [220],
+  const backToMain = planGroupSwitch(afterOneWindow, defaultGroupId);
+  assert.deepEqual(backToMain.recreateWindowIds, [220],
     "Returning to the two-window group must recreate its dormant logical window.");
-  assert.deepEqual(backToDefault.closeWindowIds, []);
-  assert.deepEqual(new Set(backToDefault.restoreTabs.map((tab) => tab.browserWindowId)), new Set([210, 220]));
+  assert.deepEqual(backToMain.closeWindowIds, []);
+  assert.deepEqual(new Set(backToMain.restoreTabs.map((tab) => tab.browserWindowId)), new Set([210, 220]));
 });
 
 test("blank-only group windows are discarded while mixed windows retain meaningful duplicate tabs", () => {
@@ -261,8 +272,8 @@ test("switching back removes placeholders only in windows receiving restored gro
     ...toEmpty.state,
     tabs: toEmpty.state.tabs.map((tab) => ({ ...tab, status: "closed", browserTabId: null })),
   };
-  const toDefault = planGroupSwitch(emptyState, defaultId);
-  assert.deepEqual(toDefault.removePlaceholderWindowIds, [20]);
+  const toMain = planGroupSwitch(emptyState, defaultId);
+  assert.deepEqual(toMain.removePlaceholderWindowIds, [20]);
 });
 
 test("moving to an inactive group closes the tab but does not activate its group", () => {
@@ -291,7 +302,7 @@ test("navigating the temporary placeholder promotes it into the active group", (
   assert.equal(state.tabs[0].url, "https://opened.example");
 });
 
-test("deleting the last group closes and forgets its tabs, then creates an empty Default", () => {
+test("deleting the last group closes and forgets its tabs, then creates an empty Main", () => {
   const ids = idFactory();
   const state = createFirstRunState([
     { id: 501, windowId: 50, url: "https://gone.example" },
@@ -303,24 +314,43 @@ test("deleting the last group closes and forgets its tabs, then creates an empty
   assert.deepEqual(result.deletedTabIds, state.tabs.map((tab) => tab.id));
   assert.deepEqual(result.placeholderWindowIds, [50]);
   assert.equal(result.state.groups.length, 1);
-  assert.equal(result.state.groups[0].name, "Default");
+  assert.equal(result.state.groups[0].name, "Main");
+  assert.equal(result.state.defaultGroupId, result.state.groups[0].id);
   assert.equal(result.state.activeGroupId, result.state.groups[0].id);
   assert.deepEqual(result.state.tabs, []);
 });
 
-test("deleting Default while other groups exist creates a replacement Default", () => {
+test("deleting a renamed main group creates a replacement Main group", () => {
   const ids = idFactory();
   let state = createFirstRunState([{ id: 601, windowId: 60, url: "https://deleted.example" }], { createId: ids });
   state = createGroup(state, { name: "Keep" }, { createId: ids });
-  const defaultId = state.groups.find((group) => group.name === "Default").id;
+  const defaultId = state.defaultGroupId;
+  state = renameGroup(state, defaultId, "Personal");
   const result = deleteGroup(state, defaultId, { createId: ids });
 
-  assert.equal(result.state.groups.some((group) => group.name === "Default"), true);
+  assert.equal(result.state.groups.some((group) => group.name === "Main"), true);
+  assert.equal(result.state.defaultGroupId, result.state.groups.find((group) => group.name === "Main").id);
   assert.equal(result.state.groups.find((group) => group.name === "Keep").id, state.groups[1].id);
   assert.equal(result.state.tabs.length, 0);
 });
 
-test("deleting the active non-Default group activates Default across the model", () => {
+test("replacement Main uses a unique name if a user group already has that name", () => {
+  const ids = idFactory();
+  let state = createEmptyState({ createId: ids });
+  const mainId = state.defaultGroupId;
+  state = renameGroup(state, mainId, "Personal");
+  state = createGroup(state, { name: "Main" }, { createId: ids });
+
+  const result = deleteGroup(state, mainId, { createId: ids });
+  const replacement = result.state.groups.find((group) => group.id === result.state.defaultGroupId);
+
+  assert.equal(replacement.name, "Main (2)");
+  assert.equal(result.state.groups.find((group) => group.name === "Main").id, state.groups[1].id);
+  assert.equal(new Set(result.state.groups.map((group) => group.name.toLocaleLowerCase())).size,
+    result.state.groups.length);
+});
+
+test("deleting the active non-Main group activates Main across the model", () => {
   const ids = idFactory();
   let state = createEmptyState({ createId: ids });
   const defaultId = state.activeGroupId;
@@ -330,12 +360,15 @@ test("deleting the active non-Default group activates Default across the model",
   const result = deleteGroup(state, workId, { createId: ids });
 
   assert.equal(result.state.activeGroupId, defaultId);
-  assert.deepEqual(result.state.groups.map((group) => group.name), ["Default"]);
+  assert.deepEqual(result.state.groups.map((group) => group.name), ["Main"]);
+  assert.equal(result.state.defaultGroupId, defaultId);
 });
 
-test("renaming the final Default is rejected", () => {
+test("renaming the Main group does not make it deletable by name", () => {
   const state = createEmptyState({ createId: idFactory() });
-  assert.throws(() => renameGroup(state, state.activeGroupId, "Work"), /must remain named Default/);
+  const renamed = renameGroup(state, state.defaultGroupId, "Work");
+  assert.equal(renamed.groups[0].name, "Work");
+  assert.equal(renamed.defaultGroupId, state.defaultGroupId);
 });
 
 test("a pinned-only window stays open without an unnecessary group placeholder", () => {
@@ -385,9 +418,9 @@ test("manually closing one tab removes it, while closing a window keeps snapshot
   state = createGroup(state, { name: "Later" }, { createId: ids });
   const laterId = state.groups[1].id;
   const toLater = planGroupSwitch(state, laterId);
-  const toDefault = planGroupSwitch(toLater.state, defaultId);
-  assert.deepEqual(toDefault.recreateWindowIds, [110]);
-  assert.deepEqual(toDefault.restoreTabs.map((tab) => tab.id), [windowTabId]);
+  const toMain = planGroupSwitch(toLater.state, defaultId);
+  assert.deepEqual(toMain.recreateWindowIds, [110]);
+  assert.deepEqual(toMain.restoreTabs.map((tab) => tab.id), [windowTabId]);
 });
 
 test("closing a nonfinal window forgets its active-group tabs but retains inactive snapshots", () => {
@@ -495,7 +528,7 @@ test("deterministic operation sequences preserve group and tab ownership invaria
       const group = state.groups[random(state.groups.length)];
       state = moveTab(state, tab.id, group.id).state;
     } else if (operation === 3 && state.groups.length > 1) {
-      const deletable = state.groups.filter((group) => group.name !== "Default");
+      const deletable = state.groups.filter((group) => group.id !== state.defaultGroupId);
       const group = deletable[random(deletable.length)];
       state = deleteGroup(state, group.id, { createId: ids }).state;
     } else {
@@ -505,7 +538,7 @@ test("deterministic operation sequences preserve group and tab ownership invaria
 
     const groupIds = new Set(state.groups.map((group) => group.id));
     const tabIds = state.tabs.map((tab) => tab.id);
-    assert.equal(state.groups.filter((group) => group.name === "Default").length, 1);
+    assert.equal(state.groups.filter((group) => group.id === state.defaultGroupId).length, 1);
     assert.equal(new Set(state.groups.map((group) => group.name.toLocaleLowerCase())).size, state.groups.length);
     assert.equal(state.groups.every((group, index) => group.order === index), true);
     assert.equal(groupIds.has(state.activeGroupId), true);

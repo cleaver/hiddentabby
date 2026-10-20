@@ -56,13 +56,14 @@ test("Chrome storage adapter forwards keyed reads and object-shaped writes", asy
   assert.throws(() => createChromeStorageAdapter(null), /compatible area/);
 });
 
-test("missing state is initialized durably with Default", async () => {
+test("missing state is initialized durably with Main", async () => {
   const storage = new MemoryStorage();
   const store = new StateStore(storage, { createInitialState: defaultState });
   const state = await store.load();
 
   assert.equal(state.groups.length, 1);
-  assert.equal(state.groups[0].name, "Default");
+  assert.equal(state.groups[0].name, "Main");
+  assert.equal(state.defaultGroupId, state.groups[0].id);
   assert.equal(storage.values.get(STATE_STORAGE_KEY).activeGroupId, state.activeGroupId);
 });
 
@@ -70,17 +71,55 @@ test("legacy version zero state migrates and persists the current window fields"
   const storage = new MemoryStorage();
   const legacy = defaultState();
   legacy.version = 0;
+  legacy.groups[0].name = "Default";
+  delete legacy.defaultGroupId;
   legacy.operations = undefined;
   legacy.windows = [{ id: "legacy-window", browserWindowId: 9, placeholderTabId: undefined }];
   storage.values.set(STATE_STORAGE_KEY, legacy);
   const store = new StateStore(storage);
 
   const migrated = await store.load();
-  assert.equal(migrated.version, 1);
+  assert.equal(migrated.version, 2);
+  assert.equal(migrated.groups[0].name, "Main");
+  assert.equal(migrated.defaultGroupId, migrated.groups[0].id);
   assert.deepEqual(migrated.operations, []);
   assert.equal(migrated.windows[0].isOpen, true);
   assert.deepEqual(migrated.windows[0].pinnedTabIds, []);
-  assert.equal(storage.values.get(STATE_STORAGE_KEY).version, 1);
+  assert.equal(storage.values.get(STATE_STORAGE_KEY).version, 2);
+});
+
+test("version one Default state migrates to a renameable Main identity", async () => {
+  const storage = new MemoryStorage();
+  const legacy = defaultState();
+  legacy.version = 1;
+  legacy.groups[0].name = "Default";
+  delete legacy.defaultGroupId;
+  legacy.groups.push({ id: "old-work", name: "Work", color: "blue", order: 1 });
+  storage.values.set(STATE_STORAGE_KEY, legacy);
+
+  const migrated = await new StateStore(storage).load();
+
+  assert.equal(migrated.version, 2);
+  assert.equal(migrated.defaultGroupId, legacy.groups[0].id);
+  assert.equal(migrated.groups[0].name, "Main");
+  assert.equal(migrated.groups[1].name, "Work");
+  assert.equal(storage.values.get(STATE_STORAGE_KEY).version, 2);
+});
+
+test("version one migration preserves an existing group named Main", async () => {
+  const storage = new MemoryStorage();
+  const legacy = defaultState();
+  legacy.version = 1;
+  legacy.groups[0].name = "Default";
+  delete legacy.defaultGroupId;
+  legacy.groups.push({ id: "old-main", name: "Main", color: "blue", order: 1 });
+  storage.values.set(STATE_STORAGE_KEY, legacy);
+
+  const migrated = await new StateStore(storage).load();
+
+  assert.equal(migrated.defaultGroupId, legacy.groups[0].id);
+  assert.equal(migrated.groups[0].name, "Default");
+  assert.equal(migrated.groups[1].name, "Main");
 });
 
 test("unsupported or malformed stored data is rejected without overwriting it", async () => {
@@ -92,7 +131,8 @@ test("unsupported or malformed stored data is rejected without overwriting it", 
   await assert.rejects(store.load(), /Cannot migrate/);
   assert.deepEqual(storage.values.get(STATE_STORAGE_KEY), future);
   assert.throws(() => validateStoredState({ ...defaultState(), activeGroupId: "missing" }), /active group/);
-  assert.throws(() => migrateStoredState({ version: 0, groups: [], tabs: [], windows: [] }), /Default/);
+  assert.throws(() => validateStoredState({ ...defaultState(), defaultGroupId: "missing" }), /main group/);
+  assert.throws(() => migrateStoredState({ version: 0, groups: [], tabs: [], windows: [] }), /main group/i);
 });
 
 test("a failed normal write leaves both stored and in-memory state unchanged", async () => {
@@ -281,5 +321,5 @@ test("serialized concurrent mutations do not lose updates", async () => {
     store.update((state) => createGroup(state, { name: "Second" })),
   ]);
 
-  assert.deepEqual(store.snapshot().groups.map((group) => group.name), ["Default", "First", "Second"]);
+  assert.deepEqual(store.snapshot().groups.map((group) => group.name), ["Main", "First", "Second"]);
 });

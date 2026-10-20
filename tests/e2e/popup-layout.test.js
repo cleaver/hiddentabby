@@ -141,8 +141,32 @@ test("popup group rows truncate long names without horizontal overflow", { timeo
     await waitFor(() => popupClient.evaluate("document.readyState"),
       (value) => value === "complete", "popup load");
     await waitFor(() => popupClient.evaluate("chrome.runtime.sendMessage({type:'state:get'})"),
-      (response) => response?.ok && response.value?.groups?.some((group) => group.name === "Default"),
+      (response) => response?.ok && response.value?.groups?.some((group) => group.name === "Main"),
       "initial HiddenTabby state");
+
+    const footerActions = await popupClient.evaluate(`(() =>
+      [...document.querySelectorAll('.popup-footer button')].map((button) => {
+        const style = getComputedStyle(button);
+        return {
+          label: button.textContent.trim(),
+          borderStyle: style.borderTopStyle,
+          borderWidth: style.borderTopWidth,
+          background: style.backgroundColor,
+          radius: style.borderTopLeftRadius,
+          cursor: style.cursor,
+          height: button.getBoundingClientRect().height,
+        };
+      })
+    )()`);
+    assert.deepEqual(footerActions.map((button) => button.label), ["Manage groups", "Open side panel"]);
+    assert.ok(footerActions.every((button) => button.borderStyle === "solid"
+      && Number.parseFloat(button.borderWidth) > 0
+      && button.background !== "rgba(0, 0, 0, 0)"
+      && Number.parseFloat(button.radius) > 0
+      && button.cursor === "pointer"),
+    "Popup footer actions should have visible button styling: " + JSON.stringify(footerActions));
+    assert.ok(footerActions.every((button) => button.height === 0 || button.height >= 32),
+      "Visible footer actions should have comfortable button height: " + JSON.stringify(footerActions));
 
     const longName = "This is a very long workspace name 1234";
     for (const groupName of ["Ice", longName, "Yet another group", "Catstagram"]) {

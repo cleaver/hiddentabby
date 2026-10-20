@@ -149,7 +149,7 @@ test("first-run native groups replace existing groups for unpinned managed tabs"
   assert.deepEqual(calls.find((call) => call[0] === "groupUpdate"), [
     "groupUpdate",
     70,
-    { title: "Default", color: "grey" },
+    { title: "Main", color: "grey" },
   ]);
   assert.equal(windows[0].tabs.find((tab) => tab.id === 2).pinned, true);
 });
@@ -184,7 +184,7 @@ test("tab grouping, placeholder creation, sessions, and tab-strip menus use the 
   assert.deepEqual(await browser.getRecentlyClosed(), [{ id: "session-1" }]);
   await browser.createMoveMenu(state);
 
-  assert.equal(calls.some((call) => call[0] === "groupUpdate" && call[2].title === "Default"), true);
+  assert.equal(calls.some((call) => call[0] === "groupUpdate" && call[2].title === "Main"), true);
   assert.equal(calls.some((call) => call[0] === "menuCreate"
     && call[1].contexts?.includes("tab")
     && call[1].title === "Move tab to group"), true);

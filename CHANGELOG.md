@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Shorten the popup's manager action and style both footer actions as buttons.
+- Name the initial group Main, allow it to be renamed, and migrate existing Default groups when the name is available.
 - Extend the sticky group heading across the card so it covers scrolling content.
 - Add a Reload groups action when the Workspace Manager cannot load its state.
 - Retry a workspace load once after a brief tab-edit lock, while coalescing storage-triggered refreshes.

@@ -10,12 +10,12 @@
 
 ## State Model
 
-- A group has an extension-owned stable ID, unique case-insensitive name, supported native color, and display order. Exactly one group is named `Default`; it cannot be renamed away. Group creation does not change the active group.
+- A group has an extension-owned stable ID, unique case-insensitive name, supported native color, and display order. `defaultGroupId` identifies the designated main group independently of its name. It starts as `Main`, can be renamed, and is replaced with a fresh empty `Main` group if deleted (with a numeric suffix if that name is already taken). Group creation does not change the active group.
 - A managed tab record has an extension-owned ID, group ID, stable logical window ID, current browser tab/window IDs (transient), URL/title/icon/index snapshot, optional sessions restore ID, and open/closed status. Duplicate URLs remain separate tabs.
 - A window record has a stable logical ID, current browser window ID, open/dormant status, pinned tab IDs, and an optional temporary placeholder tab ID.
 - Pinned tabs stay open and outside groups. Pinning removes a tab from its group; unpinning assigns it to the active group. Incognito tabs/windows are ignored.
 - Native groups are only a tab-strip aid: apply one when at least two managed unpinned tabs from the same HiddenTabby group are open in a window. Keep singleton tabs logically assigned but natively ungrouped, and re-evaluate after close, pin, move, or cross-window transfer. This prevents the browser's native last-tab group-deletion dialog without deleting the HiddenTabby group.
-- Group deletion removes all of its records. It creates a fresh empty `Default` if needed, closes live tabs after confirmation, and never restores or reassigns those tabs.
+- Group deletion removes all of its records. Deleting the designated main group creates a fresh empty `Main`, closes live tabs after confirmation, and never restores or reassigns those tabs.
 
 ## Lifecycle Policies
 
@@ -35,14 +35,14 @@ These lifecycle rules apply across normal browser windows; there is no designate
 
 | ID | Scenario | Evidence |
 |---|---|---|
-| INIT-01 | First install creates `Default` and adopts existing normal unpinned tabs | Unit, adapter integration, Chromium and Brave |
-| GROUP-01 | Create/rename/reorder/recolor without implicit activation; one `Default` remains | Unit, popup/manager E2E |
+| INIT-01 | First install creates `Main` and adopts existing normal unpinned tabs | Unit, adapter integration, Chromium and Brave |
+| GROUP-01 | Create/rename/reorder/recolor without implicit activation; main identity remains renameable and unique | Unit, state migration, manager E2E |
 | GROUP-02 | Native grouping is used for 2+ tabs per group/window; singleton tabs remain logical but ungrouped | Adapter integration, Chromium and Brave E2E |
 | TAB-01 | New/unpinned tabs join active group; pinning removes membership; incognito stays untouched | Unit, browser integration |
 | SWITCH-01 | Global A→B→A restores each group's logical windows and last active selection, closing unused unpinned windows | Unit, adapter integration, Chromium and Brave |
 | SWITCH-02 | Pinned windows remain open; empty groups retain pinned windows or one temporary placeholder window | Unit, browser integration, Chromium and Brave |
 | MOVE-01 | Moving to inactive group closes/saves immediately without activating it | Unit, native tab-menu E2E |
-| DELETE-01 | Warning cancellation is inert; confirmation closes tabs, forgets records, and creates empty `Default` as needed | Unit, UI E2E, restart/fault injection |
+| DELETE-01 | Warning cancellation is inert; confirmation closes tabs, forgets records, and creates empty `Main` when deleting the designated main group | Unit, UI E2E, restart/fault injection |
 | DELETE-02 | Manager deletion closes a window when its final tab is deleted, keeps pinned/other tabs, disables deleting the manager's sole full-page tab, and never restores deleted content | Unit, manager UI, Chromium and Brave E2E, interruption recovery |
 | LIFE-01 | Manual tab close forgets that tab; nonfinal window close forgets active-group contents but retains inactive snapshots; final-window close preserves useful snapshots | Unit, adapter integration, Chromium and Brave E2E |
 | PRIV-01 | Local storage only; pinned/incognito exclusion; no remote executable resources | Static/package checks, browser profile inspection |

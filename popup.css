@@ -203,31 +203,38 @@ h1 {
 
 .popup-footer {
   flex-wrap: wrap;
-  gap: 6px 14px;
+  gap: 8px;
   margin-top: 12px;
   padding-top: 10px;
   border-top: 1px solid #27384c;
 }
 
-.link-button {
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: #8ce0bf;
+.footer-button {
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  justify-content: center;
+  padding: 7px 10px;
+  border: 1px solid #3d566f;
+  border-radius: 8px;
+  background: #1a2a3d;
+  color: #c3d3e3;
   font-size: 11px;
   font-weight: 600;
   cursor: pointer;
+  white-space: nowrap;
 }
 
-.link-button:hover,
-.link-button:focus-visible {
-  color: #c4ffe8;
-  outline: none;
-  text-decoration: underline;
+.footer-button:hover {
+  border-color: #75c9ab;
+  background: #20344a;
+  color: #f4f7fb;
 }
 
-.secondary-link {
-  color: #adc0d6;
+.footer-button:focus-visible {
+  border-color: #75c9ab;
+  outline: 2px solid #75c9ab;
+  outline-offset: 2px;
 }
 
 .empty-state {

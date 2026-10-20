@@ -27,7 +27,6 @@ export function validateStoredState(value) {
 
   const groupIds = new Set();
   const groupNames = new Set();
-  const defaultGroups = [];
   value.groups.forEach((group, index) => {
     if (!group || typeof group.id !== "string" || !group.id
       || typeof group.name !== "string" || !group.name.trim()
@@ -40,10 +39,11 @@ export function validateStoredState(value) {
     }
     groupIds.add(group.id);
     groupNames.add(normalizedName);
-    if (normalizedName === DEFAULT_GROUP_NAME.toLocaleLowerCase()) defaultGroups.push(group.id);
   });
 
-  if (defaultGroups.length !== 1) throw new Error("Stored state must contain exactly one Default group.");
+  if (typeof value.defaultGroupId !== "string" || !groupIds.has(value.defaultGroupId)) {
+    throw new Error("Stored state must identify an existing main group.");
+  }
   if (!groupIds.has(value.activeGroupId)) throw new Error("Stored active group does not exist.");
 
   const windowIds = new Set();
@@ -97,7 +97,7 @@ export function validateStoredState(value) {
 
 export function migrateStoredState(value) {
   if (value?.version === STATE_VERSION) return validateStoredState(value);
-  if (value?.version !== undefined && value.version !== 0) {
+  if (value?.version !== undefined && value.version !== 0 && value.version !== 1) {
     throw new Error(`Cannot migrate HiddenTabby state version ${value.version}.`);
   }
   if (!value || typeof value !== "object" || !Array.isArray(value.groups)
@@ -105,9 +105,31 @@ export function migrateStoredState(value) {
     throw new Error("Stored HiddenTabby state cannot be migrated safely.");
   }
 
+  const existingMainName = value.groups.some((group) => group?.id !== value.defaultGroupId
+    && typeof group?.name === "string"
+    && group.name.trim().toLocaleLowerCase() === DEFAULT_GROUP_NAME.toLocaleLowerCase());
+  const legacyDefaultGroups = value.groups.filter((group) => typeof group?.name === "string"
+    && group.name.trim().toLocaleLowerCase() === "default");
+  const defaultGroupId = typeof value.defaultGroupId === "string"
+    && value.groups.some((group) => group?.id === value.defaultGroupId)
+    ? value.defaultGroupId
+    : legacyDefaultGroups.length === 1
+      ? legacyDefaultGroups[0].id
+      : null;
+  if (!defaultGroupId) throw new Error("Stored state must identify exactly one main group.");
+
+  const groups = value.groups.map((group) => group?.id === defaultGroupId
+    && typeof group?.name === "string"
+    && group.name.trim().toLocaleLowerCase() === "default"
+    && !existingMainName
+    ? { ...group, name: DEFAULT_GROUP_NAME }
+    : group);
+
   const migrated = {
     ...value,
     version: STATE_VERSION,
+    defaultGroupId,
+    groups,
     operations: Array.isArray(value.operations) ? value.operations : [],
     windows: value.windows.map((window) => ({
       ...window,

@@ -8,9 +8,9 @@ HiddenTabby is a local-only Manifest V3 extension for Chrome and Brave. It organ
 2. Turn on **Developer mode** and choose **Load unpacked**.
 3. Select this repository's root directory.
 
-On first run, HiddenTabby creates **Default** and adds existing unpinned tabs from normal windows. New unpinned tabs join the active group. Pinned tabs and incognito windows are excluded. A new group does not become active when created.
+On first run, HiddenTabby creates **Main** and adds existing unpinned tabs from normal windows. You can rename Main like any other group; its role is kept independently of its name. New unpinned tabs join the active group. Pinned tabs and incognito windows are excluded. A new group does not become active when created.
 
-Use the toolbar popup to switch groups or create one. Choose **Manage groups and tabs** for rename, color, ordering, deletion, and tab moves. The same manager can open in the side panel when the browser supports it.
+Use the toolbar popup to switch groups or create one. Choose **Manage groups** for rename, color, ordering, deletion, and tab moves. The same manager can open in the side panel when the browser supports it.
 
 When only one tab from a HiddenTabby group is open in a window, HiddenTabby leaves it outside the browser's native tab group to avoid the browser's confirmation when closing that last tab. The tab remains assigned to its HiddenTabby group.
 

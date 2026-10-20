@@ -260,17 +260,11 @@ function makeGroupCard(group, index, state, windowLabels, managerTabContext) {
   renameInput.maxLength = 40;
   renameInput.value = group.name;
   renameInput.setAttribute("aria-label", `Rename ${group.name}`);
-  const isDefaultGroup = group.name.toLocaleLowerCase() === "default";
-  if (isDefaultGroup) {
-    renameInput.disabled = true;
-    renameInput.title = "Keep one group named Default at all times.";
-  }
   const colorPalette = makeColorPalette(group.color, group.name, group.id);
   const renameButton = document.createElement("button");
   renameButton.type = "submit";
   renameButton.className = "button secondary";
   renameButton.textContent = "Save";
-  renameButton.disabled = isDefaultGroup;
   renameForm.append(renameInput, renameButton, colorPalette);
   renameForm.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -334,11 +328,12 @@ function makeGroupCard(group, index, state, windowLabels, managerTabContext) {
   moveDown.setAttribute("aria-label", `Move ${group.name} down`);
   actions.append(moveUp, moveDown);
   const deleteButton = makeButton("Delete", "danger", async () => {
+    const mainGroup = state.groups.find((candidate) => candidate.id === state.defaultGroupId);
     const defaultNote =
-      group.name.toLocaleLowerCase() === "default"
-        ? " A fresh empty Default group will replace it."
+      state.defaultGroupId === group.id
+        ? " A fresh empty Main group will replace it."
         : state.activeGroupId === group.id
-          ? " Default will become active."
+          ? ` “${mainGroup?.name ?? "Main"}” will become active.`
           : "";
     const warning = `Delete “${group.name}”? This closes ${openCount} open tab${openCount === 1 ? "" : "s"} and forgets ${groupTabs.length} saved/live tab${groupTabs.length === 1 ? "" : "s"} across all windows. Nothing is moved to another group and browser history is not deleted.${defaultNote}`;
     if (!window.confirm(warning)) return;

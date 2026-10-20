@@ -1,5 +1,5 @@
-export const STATE_VERSION = 1;
-export const DEFAULT_GROUP_NAME = "Default";
+export const STATE_VERSION = 2;
+export const DEFAULT_GROUP_NAME = "Main";
 export const DEFAULT_GROUP_COLOR = "grey";
 
 const BROWSER_NEW_TAB_URLS = new Set([
@@ -65,6 +65,7 @@ export function createEmptyState({ createId = () => crypto.randomUUID() } = {}) 
 
   return {
     version: STATE_VERSION,
+    defaultGroupId: defaultGroup.id,
     activeGroupId: defaultGroup.id,
     groups: [defaultGroup],
     tabs: [],
@@ -129,12 +130,6 @@ export function createGroup(state, { name, color = DEFAULT_GROUP_COLOR }, option
 export function renameGroup(state, groupId, name) {
   const group = requireGroup(state, groupId);
   const normalizedName = validateName(name);
-
-  if (group.name.toLocaleLowerCase() === DEFAULT_GROUP_NAME.toLocaleLowerCase()
-    && !state.groups.some((candidate) => candidate.id !== groupId
-      && candidate.name.toLocaleLowerCase() === DEFAULT_GROUP_NAME.toLocaleLowerCase())) {
-    throw new Error("At least one group must remain named Default.");
-  }
 
   if (state.groups.some((candidate) => candidate.id !== groupId
     && candidate.name.toLocaleLowerCase() === normalizedName.toLocaleLowerCase())) {
@@ -353,32 +348,45 @@ export function setWindowPlaceholder(state, browserWindowId, browserTabId, optio
   };
 }
 
+function uniqueMainName(groups) {
+  const names = new Set(groups.map((group) => group.name.trim().toLocaleLowerCase()));
+  let name = DEFAULT_GROUP_NAME;
+  let suffix = 2;
+  while (names.has(name.toLocaleLowerCase())) {
+    name = `${DEFAULT_GROUP_NAME} (${suffix})`;
+    suffix += 1;
+  }
+  return name;
+}
+
 export function deleteGroup(state, groupId, options = {}) {
   const group = requireGroup(state, groupId);
   const closeTabs = state.tabs.filter((tab) => tab.groupId === groupId && tab.status === "open");
   const tabs = state.tabs.filter((tab) => tab.groupId !== groupId);
   let groups = state.groups.filter((candidate) => candidate.id !== groupId);
   const createId = options.createId ?? (() => crypto.randomUUID());
-  const deletedDefault = group.name.toLocaleLowerCase() === DEFAULT_GROUP_NAME.toLocaleLowerCase();
+  const deletedDefault = groupId === state.defaultGroupId;
   let replacementDefault = null;
 
   if (deletedDefault || groups.length === 0) {
     replacementDefault = {
       id: createId(),
-      name: DEFAULT_GROUP_NAME,
+      name: uniqueMainName(groups),
       color: DEFAULT_GROUP_COLOR,
       order: groups.length,
     };
     groups = [...groups, replacementDefault];
   }
 
+  const defaultGroupId = replacementDefault?.id ?? state.defaultGroupId;
   const activeGroupId = groupId !== state.activeGroupId
     ? state.activeGroupId
-    : replacementDefault?.id ?? groups.find((candidate) => candidate.name.toLocaleLowerCase() === DEFAULT_GROUP_NAME.toLocaleLowerCase())?.id ?? groups[0].id;
+    : defaultGroupId ?? groups[0].id;
 
   return {
     state: {
       ...state,
+      defaultGroupId,
       groups: groups.map((candidate, order) => ({ ...candidate, order })),
       tabs,
       activeGroupId,

@@ -9,10 +9,10 @@ Build one Manifest V3 extension for Chrome and Brave that brings the main tab-or
 ## Version 1 Core
 
 - Create, rename, reorder, color, and delete named groups.
-- Keep at least one group named `Default`. Deleting a group closes all its member tabs across windows and removes its saved group/tab records. Show a confirmation warning with the group name and number of tabs that will close; this does not erase browser history. Never reassign or restore tabs closed by group deletion.
+- Maintain one designated main group independently of its editable display name. Its initial and replacement name is `Main`; users can rename it. If another group already uses `Main`, a replacement gets the next available name, such as `Main (2)`. Deleting any group closes all its member tabs across windows and removes its saved group/tab records. Show a confirmation warning with the group name and number of tabs that will close; this does not erase browser history. Never reassign or restore tabs closed by group deletion.
 - Add the current tab to a group and move existing tabs between groups.
 - Manage every unpinned tab in a group; keep pinned tabs pinned and outside groups. During a group switch, if a window has no tabs in the selected group, keep it open with a temporary, ungrouped New Tab placeholder. Assign that tab to the active group if the user navigates it; remove the placeholder when a group tab is restored to the window. Workspace Manager tab deletion follows the separate window-close rule below.
-- On first run, create a `Default` group and assign all currently open unpinned tabs across normal windows to it, replacing any existing native group assignments for those tabs.
+- On first run, create a `Main` group and assign all currently open unpinned tabs across normal windows to it, replacing any existing native group assignments for those tabs.
 - Assign newly opened unpinned tabs to the currently active group. Creating a new group from the popup must not activate it.
 - Add a tab-strip right-click action to move the clicked tab into another group. Moving it to an inactive group closes/saves it immediately and does not switch the active group.
 - Switch groups and return to the last active tab in each group.
@@ -44,7 +44,7 @@ Search and keyboard navigation, drag-and-drop, group sorting, JSON backup and re
 
 ## Deletion and Active Group Behavior
 
-- When deleting the active group, switch all windows to `Default`. If deletion would leave no `Default` group, create a fresh, empty `Default`; if it would leave no groups, this is the new sole group. Tabs from the deleted group remain closed and are not added to the replacement group.
+- When deleting the active group, switch all windows to the designated main group. If deleting that group, create a fresh, empty `Main`; if it was the last group, this is the new sole group. Tabs from the deleted group remain closed and are not added to the replacement group.
 
 ## Workspace Manager Tab Deletion
 

@@ -132,14 +132,14 @@ function setup(windows = [normalWindow()]) {
   return { storage, browser, calls, store, controller: new WorkspaceController({ store, browser }) };
 }
 
-test("first startup adopts only normal unpinned tabs into Default", async () => {
+test("first startup adopts only normal unpinned tabs into Main", async () => {
   const privateWindow = { id: 50, type: "normal", incognito: true, tabs: [{ id: 501, windowId: 50, url: "https://private.example" }] };
   const popupWindow = { id: 51, type: "popup", incognito: false, tabs: [{ id: 511, windowId: 51, url: "https://popup.example" }] };
   const { controller, calls } = setup([normalWindow(), privateWindow, popupWindow]);
   const state = await controller.getState();
 
   assert.equal(state.groups.length, 1);
-  assert.equal(state.groups[0].name, "Default");
+  assert.equal(state.groups[0].name, "Main");
   assert.deepEqual(state.tabs.map((tab) => tab.browserTabId), [101]);
   assert.deepEqual(state.windows[0].pinnedTabIds, [102]);
   assert.equal(calls.filter(([name]) => name === "adopt").length, 1);
@@ -211,7 +211,7 @@ test("a tab close that wakes the worker is forgotten across a four-group round t
     "Switching back must never recreate the closed tab.");
 });
 
-test("closing a nonfinal Group 3 window forgets its tab but preserves Default's other window", async () => {
+test("closing a nonfinal Group 3 window forgets its tab but preserves Main's other window", async () => {
   const windows = [normalWindow(10), normalWindow(20), normalWindow(30)];
   const { controller, store } = setup(windows);
   const initial = await controller.getState();
@@ -245,10 +245,10 @@ test("closing a nonfinal Group 3 window forgets its tab but preserves Default's 
   await controller.onWindowRemoved(thirdWindowId);
 
   await controller.switchGroup(groupIds[3]);
-  const backToDefault = await controller.switchGroup(groupIds[0]);
-  assert.equal(backToDefault.state.tabs.filter((tab) => tab.groupId === groupIds[0]
+  const backToMain = await controller.switchGroup(groupIds[0]);
+  assert.equal(backToMain.state.tabs.filter((tab) => tab.groupId === groupIds[0]
     && tab.status === "open").length, 2,
-  "Default should retain its two original windows.");
+  "Main should retain its two original windows.");
   assert.equal(windows.some((window) => window.id === thirdWindowId), false);
 
   const backToGroupThree = await controller.switchGroup(groupIds[2]);
@@ -438,7 +438,7 @@ test("a cold worker forgets the closed window's active tabs while retaining anot
 
   assert.equal(state.tabs.some((tab) => tab.browserWindowId === closedWindowId
     && tab.groupId === defaultGroupId), false,
-  "A cold-start window-removal event must forget Default's closed physical contents.");
+  "A cold-start window-removal event must forget Main's closed physical contents.");
   assert.equal(state.tabs.some((tab) => tab.id === inactiveTab.id
     && tab.groupId === inactiveGroupId && tab.status === "closed"), true,
   "Saved tabs belonging to another group must survive the same physical window close.");
@@ -680,9 +680,9 @@ test("a tab closed just before switching is not resurrected when its removal eve
   assert.equal(removalState.tabs.some((tab) => tab.id === manuallyClosedRecord.id), false,
     "A pending switch must discard a snapshot already absent from the live browser.");
 
-  const restoredDefault = await controller.switchGroup(initial.activeGroupId);
-  assert.equal(restoredDefault.state.tabs.some((tab) => tab.id === manuallyClosedRecord.id), false,
-    "A manually closed tab must not return when switching back to Default.");
+  const restoredMain = await controller.switchGroup(initial.activeGroupId);
+  assert.equal(restoredMain.state.tabs.some((tab) => tab.id === manuallyClosedRecord.id), false,
+    "A manually closed tab must not return when switching back to Main.");
 });
 
 test("a manual close during switch preparation removes that tab from the pending restore", async () => {
@@ -718,9 +718,9 @@ test("a manual close during switch preparation removes that tab from the pending
 
   assert.equal(switched.state.tabs.some((tab) => tab.id === manuallyClosedRecord.id), false,
     "The manually closed MadCSS tab must not remain in the pending group-switch restore set.");
-  const restoredDefault = await controller.switchGroup(initial.activeGroupId);
-  assert.equal(restoredDefault.state.tabs.some((tab) => tab.id === manuallyClosedRecord.id), false,
-    "Switching back to Default must not restore the MadCSS tab that closed during switch preparation.");
+  const restoredMain = await controller.switchGroup(initial.activeGroupId);
+  assert.equal(restoredMain.state.tabs.some((tab) => tab.id === manuallyClosedRecord.id), false,
+    "Switching back to Main must not restore the MadCSS tab that closed during switch preparation.");
 });
 
 test("a manual close during an inactive-group move removes the pending moved snapshot", async () => {
@@ -845,12 +845,12 @@ test("switching from a two-window group to a one-window group closes then recrea
   assert.deepEqual(calls.filter(([name]) => name === "removeWindow"), [["removeWindow", 20]]);
   assert.equal(toOneWindow.state.windows.find((window) => window.browserWindowId === 20).isOpen, false);
 
-  const backToDefault = await controller.switchGroup(defaultId);
+  const backToMain = await controller.switchGroup(defaultId);
   assert.equal(windows.length, 2, "Switching back should recreate the second logical window once.");
   assert.equal(windows.some((window) => window.id === 20), false,
     "Recreated windows receive fresh browser IDs while retaining their logical identity.");
-  assert.equal(backToDefault.state.tabs.filter((tab) => tab.groupId === defaultId && tab.status === "open").length, 2);
-  assert.equal(backToDefault.state.windows.find((window) => window.id === initial.windows[1].id).isOpen, true);
+  assert.equal(backToMain.state.tabs.filter((tab) => tab.groupId === defaultId && tab.status === "open").length, 2);
+  assert.equal(backToMain.state.windows.find((window) => window.id === initial.windows[1].id).isOpen, true);
   assert.equal(calls.filter(([name]) => name === "createWindowWithPlaceholder").length, 1);
   assert.equal(calls.filter(([name]) => name === "removeWindow").length, 1);
 });
@@ -1255,7 +1255,7 @@ test("closing a partially restored destination window deletes its active tabs bu
     && tab.windowId === logicalTwenty.id && tab.status === "open"), true);
   assert.equal(switched.state.tabs.some((tab) => tab.groupId === defaultId
     && tab.windowId === logicalTen.id && tab.status === "closed"), true,
-  "The same physical window's inactive Default snapshot remains available.");
+  "The same physical window's inactive Main snapshot remains available.");
 });
 
 test("closing the final browser window during a switch preserves every useful group snapshot", async () => {
@@ -1304,7 +1304,7 @@ test("global switching closes every active group tab and restores target tabs pe
     type: "normal",
     incognito: false,
     tabs: [
-      { id: windowId * 10 + 1, windowId, index: 0, active: true, url: `https://default-${windowId}.example`, title: `Default ${windowId}` },
+      { id: windowId * 10 + 1, windowId, index: 0, active: true, url: `https://default-${windowId}.example`, title: `Main ${windowId}` },
       { id: windowId * 10 + 2, windowId, index: 1, url: `https://work-${windowId}.example`, title: `Work ${windowId}` },
       { id: windowId * 10 + 3, windowId, index: 2, pinned: true, url: "https://pin.example", title: "Pinned" },
     ],
@@ -2147,7 +2147,7 @@ test("failed tab deletion is recovered without re-adopting the live tab", async 
     "Deleting the window's final tab must not recreate it with a placeholder after recovery.");
 });
 
-test("deleting the active group closes its tabs and activates an empty Default", async () => {
+test("deleting the active group closes its tabs and activates an empty Main", async () => {
   const { controller, store, calls } = setup();
   const initial = await controller.getState();
   const defaultId = initial.groups[0].id;
@@ -2165,7 +2165,7 @@ test("deleting the active group closes its tabs and activates an empty Default",
   const result = await controller.deleteGroup(workId);
   assert.equal(result.state.activeGroupId, defaultId);
   assert.equal(result.deletedCount, 1);
-  assert.deepEqual(result.state.groups.map((group) => group.name), ["Default"]);
+  assert.deepEqual(result.state.groups.map((group) => group.name), ["Main"]);
   assert.deepEqual(result.state.tabs, []);
   assert.deepEqual(calls.filter(([name]) => name === "remove").flatMap(([, ids]) => ids), [101]);
   assert.equal(result.state.windows[0].pinnedTabIds.length > 0, true);
@@ -2189,7 +2189,7 @@ test("deleting the final tab from a secondary window closes it while pinned wind
 
   const deleted = await controller.deleteGroup(defaultId);
   assert.equal(deleted.state.groups.length, 1);
-  assert.equal(deleted.state.groups[0].name, "Default");
+  assert.equal(deleted.state.groups[0].name, "Main");
   assert.equal(deleted.state.windows.find((window) => window.browserWindowId === 10).isOpen, true,
     "A window with pinned tabs remains open for the replacement empty group.");
   assert.equal(deleted.state.windows.find((window) => window.browserWindowId === 10).placeholderTabId, null,
@@ -2200,14 +2200,14 @@ test("deleting the final tab from a secondary window closes it while pinned wind
   assert.equal(browser.isPlaceholderUrl(store.snapshot().tabs.find((tab) => tab.browserWindowId === 20)?.url), false);
 });
 
-test("deleting the final Default creates a fresh empty Default", async () => {
+test("deleting the final Main creates a fresh empty Main", async () => {
   const { controller } = setup();
   const initial = await controller.getState();
   const result = await controller.deleteGroup(initial.groups[0].id);
 
   assert.equal(result.deletedCount, 1);
   assert.equal(result.state.groups.length, 1);
-  assert.equal(result.state.groups[0].name, "Default");
+  assert.equal(result.state.groups[0].name, "Main");
   assert.notEqual(result.state.groups[0].id, initial.groups[0].id);
   assert.equal(result.state.activeGroupId, result.state.groups[0].id);
   assert.equal(result.state.tabs.length, 0);
@@ -2219,7 +2219,7 @@ test("pending deletion recovery never adopts a deleted tab back into a group", a
   first.browser.removeTabs = async () => { throw new Error("injected deletion failure"); };
 
   await assert.rejects(first.controller.deleteGroup(initial.groups[0].id), /Could not close the outgoing tabs/);
-  assert.equal(first.store.snapshot().groups[0].name, "Default");
+  assert.equal(first.store.snapshot().groups[0].name, "Main");
   assert.equal(first.store.snapshot().tabs.length, 0);
   assert.equal(first.store.snapshot().operations[0].type, "delete-group");
 
@@ -2246,7 +2246,7 @@ test("pending deletion recovery never adopts a deleted tab back into a group", a
   assert.equal(windows[0].tabs.some((tab) => tab.id === 151), false);
   assert.equal(recovered.windows[0].browserWindowId, 30);
   assert.equal(recovered.groups.length, 1);
-  assert.equal(recovered.groups[0].name, "Default");
+  assert.equal(recovered.groups[0].name, "Main");
 });
 
 test("global switching preserves ownership at 10, 100, and 500 tabs", async (context) => {
