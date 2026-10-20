@@ -24,7 +24,7 @@ HiddenTabby asks the browser Sessions API to restore closed tabs, then falls bac
 
 Group and tab metadata, including page titles and URLs, stays in `chrome.storage.local` in the current browser profile so HiddenTabby can manage and restore workspaces. HiddenTabby does not sync or upload this data to an external service. See the [Privacy Policy](PRIVACY.md). The extension requests `tabs` and `tabGroups` to inspect/manage groups, `sessions` for tab restoration, `contextMenus` for the tab-strip move action, `storage` for local persistence, and `sidePanel` for the optional manager surface.
 
-Brave Containers are managed separately from HiddenTabby groups. The manager links to Brave's Container settings, but the extension does not identify, create, or assign Containers because a supported extension API is not available yet.
+HiddenTabby manages tab workspaces only. Brave Containers are separate browser features; HiddenTabby does not detect or manage Container membership.
 
 ## Development and tests
 
@@ -40,7 +40,7 @@ npm run test:e2e
 npm run test:e2e:brave
 ```
 
-The package command requires the system zip utility and writes `dist/HiddenTabby.zip` with the runtime extension files and MIT license. The packaged E2E commands require `unzip` and the installed Linux browsers at `/usr/bin/chromium` and `/usr/bin/brave`. They load the ZIP contents in headless browser profiles, exercise real tab/window/group/session/storage APIs, cover first-run adoption over existing native groups, enable incognito access and verify private tabs stay excluded, open and use the action popup and side-panel manager, test the Brave settings link, verify service-worker idle suspension/wake, and confirm state across a browser restart. Chromium closes its final normal window and restores its dormant tabs; Brave keeps the last normal window open in this headless setup. The runs save wide and narrow manager screenshots under `test-results/` and discard their profiles.
+The package command requires the system zip utility and writes `dist/HiddenTabby.zip` with the runtime extension files and MIT license. The packaged E2E commands require `unzip` and the installed Linux browsers at `/usr/bin/chromium` and `/usr/bin/brave`. They load the ZIP contents in headless browser profiles, exercise real tab/window/group/session/storage APIs, cover first-run adoption over existing native groups, enable incognito access and verify private tabs stay excluded, open and use the action popup and side-panel manager, verify service-worker idle suspension/wake, and confirm state across a browser restart. Chromium closes its final normal window and restores its dormant tabs; Brave keeps the last normal window open in this headless setup. The runs save wide and narrow manager screenshots under `test-results/` and discard their profiles.
 
 Toolbar and extension-list icons are generated in `icons/` from the source illustration `hidden-tabby.png`; the workspace manager uses a high-resolution variant. Runtime icons are included in the package.
 
@@ -60,7 +60,7 @@ gh attestation verify HiddenTabby.zip \
 
 The SHA-256 checksum is a fingerprint: checking it confirms that your downloaded ZIP matches the published checksum, but it does not identify the ZIP's source. The GitHub artifact attestation is a signed build record that links the ZIP to this repository, the source revision associated with the release tag, and the workflow that built it. Verifying both gives evidence that the ZIP came from this release's source and build process. This is not a code review or a guarantee that the code is bug-free or secure; the source, maintainer account, and build service still require trust. Review the tagged source and workflow if you want to assess the code yourself.
 
-Run `npm run test:e2e` for packaged Chromium checks and `npm run test:e2e:brave` for Brave. Reload the unpacked extension after editing files. The suite tests the extension in disposable headless browser profiles; separate headed checks have clicked the toolbar icon, dismissed the popup with Escape, selected a native tab-strip move destination, and opened the side-panel manager in Chromium and Brave. The Brave E2E also clicks the Container settings control and verifies that Brave opens its settings page. Initial support targets Linux, with Chromium as the Chrome proxy and a separate Brave run.
+Run `npm run test:e2e` for packaged Chromium checks and `npm run test:e2e:brave` for Brave. Reload the unpacked extension after editing files. The suite tests the extension in disposable headless browser profiles; separate headed checks have clicked the toolbar icon, dismissed the popup with Escape, selected a native tab-strip move destination, and opened the side-panel manager in Chromium and Brave. Initial support targets Linux, with Chromium as the Chrome proxy and a separate Brave run.
 
 ## License
 

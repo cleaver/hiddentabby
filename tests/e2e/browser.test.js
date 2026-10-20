@@ -344,40 +344,9 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
       "persistent side-panel color selection",
     );
     assert.equal(recoloredMain.color, "purple");
-    const expectedBrave = /brave/i.test(browserPath) || /Brave/i.test(endpoint.version.Browser);
-    const braveControls = await waitFor(
-      () => sidePanelClient.evaluate("(async()=>({isBrave:Boolean(await navigator.brave?.isBrave?.()),cardHidden:document.querySelector('#brave-container-card').hidden,helpHidden:document.querySelector('#brave-containers-help').hidden}))()"),
-      (controls) => controls.isBrave === expectedBrave
-        && controls.cardHidden === !expectedBrave && controls.helpHidden === !expectedBrave,
-      "browser-specific Brave Container controls",
-    );
-    assert.equal(braveControls.isBrave, expectedBrave, "The manager should identify the tested browser correctly.");
-    assert.equal(braveControls.cardHidden, !braveControls.isBrave);
-    assert.equal(braveControls.helpHidden, !braveControls.isBrave);
-    if (braveControls.isBrave) {
-      const settingsClickPoint = await sidePanelClient.evaluate("(() => { const link=document.querySelector('#open-brave-container-settings'); link.scrollIntoView({block:'center'}); const rect=link.getBoundingClientRect(); return {x:rect.left+rect.width/2,y:rect.top+rect.height/2}; })()");
-      await sidePanelClient.send("Input.dispatchMouseEvent", {
-        type: "mouseMoved", x: settingsClickPoint.x, y: settingsClickPoint.y,
-      });
-      await sidePanelClient.send("Input.dispatchMouseEvent", {
-        type: "mousePressed", x: settingsClickPoint.x, y: settingsClickPoint.y, button: "left", clickCount: 1,
-      });
-      await sidePanelClient.send("Input.dispatchMouseEvent", {
-        type: "mouseReleased", x: settingsClickPoint.x, y: settingsClickPoint.y, button: "left", clickCount: 1,
-      });
-      const openedSettings = await waitFor(async () => {
-        const [status, targets] = await Promise.all([
-          sidePanelClient.evaluate("({text:document.querySelector('#status').textContent,kind:document.querySelector('#status').dataset.kind})"),
-          browserTargets(endpointUrl),
-        ]);
-        const settings = targets.find((target) => target.type === "page"
-          && /^(brave|chrome):\/\/settings\/braveContent/.test(target.url));
-        return { status, settings };
-      }, (value) => value.settings && value.status.text === "Opened Brave Container settings."
-        && value.status.kind === "success", "Brave Container settings opened from manager");
-      assert.match(openedSettings.settings.url, /^(brave|chrome):\/\/settings\/braveContent/);
-      await browserClient.send("Target.closeTarget", { targetId: openedSettings.settings.id });
-    }
+    const containerControls = await sidePanelClient.evaluate("({card:document.querySelector('#brave-container-card'),settingsLink:document.querySelector('#open-brave-container-settings'),helpLink:document.querySelector('#brave-containers-help')})");
+    assert.deepEqual(containerControls, { card: null, settingsLink: null, helpLink: null },
+      "The Workspace Manager should not expose Brave Container controls.");
 
     const controllerTab = await popup.client.evaluate("chrome.tabs.getCurrent().then((tab) => ({id:tab.id,windowId:tab.windowId}))");
     await popup.client.evaluate("chrome.tabs.update(" + controllerTab.id + ", {pinned:true})");

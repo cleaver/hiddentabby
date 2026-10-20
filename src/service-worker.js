@@ -50,7 +50,6 @@ export function registerServiceWorker(chromeApi, controller) {
       "tab:delete": () => isFullPageManagerSender
         ? controller.deleteTab(message.tabId, { managerTabId: sender.tab.id })
         : controller.deleteTab(message.tabId),
-      "brave:containers:open-settings": () => chromeApi.tabs.create({ url: "brave://settings/braveContent" }),
     };
     const command = commands[message.type];
     if (!command) return false;

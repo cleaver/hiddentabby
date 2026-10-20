@@ -103,24 +103,3 @@ test("service worker does not treat a side-panel host tab as the manager tab", a
 
   assert.deepEqual(calls, [["deleteTab", 42]]);
 });
-
-test("Brave Container settings command opens the fixed browser settings page", async () => {
-  const { chrome } = setup();
-  const createdTabs = [];
-  chrome.tabs.create = async (properties) => {
-    createdTabs.push(properties);
-    return { id: 17, ...properties };
-  };
-  const responses = [];
-  const [accepted] = chrome.runtime.onMessage.fire(
-    { type: "brave:containers:open-settings" },
-    {},
-    (response) => responses.push(response),
-  );
-
-  assert.equal(accepted, true);
-  await new Promise((resolve) => setImmediate(resolve));
-
-  assert.deepEqual(createdTabs, [{ url: "brave://settings/braveContent" }]);
-  assert.deepEqual(responses, [{ ok: true, value: { id: 17, url: "brave://settings/braveContent" } }]);
-});

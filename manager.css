@@ -603,43 +603,6 @@ a:focus-visible {
   min-width: 118px;
 }
 
-.settings-panel > p {
-  margin: 12px 0 16px;
-  color: #b3c0d0;
-  font-size: 12px;
-  line-height: 1.5;
-}
-
-.brave-card {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 14px;
-  border: 1px solid #33495f;
-  border-radius: 12px;
-  background: #172538;
-}
-
-#brave-container-card[hidden],
-#brave-containers-help[hidden] {
-  display: none;
-}
-
-.brave-card p {
-  max-width: 650px;
-  margin: 0;
-  color: #aebed0;
-  font-size: 11px;
-  line-height: 1.5;
-}
-
-.help-link {
-  display: inline-block;
-  margin-top: 11px;
-  font-size: 11px;
-}
-
 .page-footer {
   margin: 15px 3px 0;
   color: #95a6ba;
@@ -716,8 +679,4 @@ a:focus-visible {
     left: calc(100% + 8px);
   }
 
-  .brave-card {
-    align-items: flex-start;
-    flex-direction: column;
-  }
 }

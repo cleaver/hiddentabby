@@ -2,11 +2,6 @@ const groupsElement = document.querySelector("#groups");
 const statusElement = document.querySelector("#status");
 const createForm = document.querySelector("#create-form");
 const nameInput = document.querySelector("#group-name");
-const braveContainerCard = document.querySelector("#brave-container-card");
-const braveContainersHelp = document.querySelector("#brave-containers-help");
-const openBraveContainerSettings = document.querySelector(
-  "#open-brave-container-settings",
-);
 const collapsedGroupIds = new Set();
 const tabDragDataType = "application/x-hiddentabby-tab-id";
 let draggedTabId = null;
@@ -49,17 +44,6 @@ async function command(type, values = {}) {
       response?.error ?? "HiddenTabby could not complete that action.",
     );
   return response.value;
-}
-
-async function configureBraveContainerControls() {
-  let isBrave = false;
-  try {
-    isBrave = Boolean(await navigator.brave?.isBrave?.());
-  } catch {
-    isBrave = false;
-  }
-  braveContainerCard.hidden = !isBrave;
-  braveContainersHelp.hidden = !isBrave;
 }
 
 function setStatus(message, kind = "info") {
@@ -676,15 +660,4 @@ createForm.addEventListener("submit", async (event) => {
   nameInput.value = "";
 });
 
-openBraveContainerSettings.addEventListener("click", async (event) => {
-  event.preventDefault();
-  try {
-    await command("brave:containers:open-settings");
-    setStatus("Opened Brave Container settings.", "success");
-  } catch (error) {
-    setStatus(error.message, "error");
-  }
-});
-
-void configureBraveContainerControls();
 void loadState();

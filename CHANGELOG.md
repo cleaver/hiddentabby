@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Remove the Brave Container settings shortcut from the Workspace Manager; Containers remain outside HiddenTabby's workspace scope.
+- Remove the unused Preferences panel from the Workspace Manager.
 - Shorten the popup's manager action and style both footer actions as buttons.
 - Name the initial group Main, allow it to be renamed, and migrate existing Default groups when the name is available.
 - Extend the sticky group heading across the card so it covers scrolling content.
