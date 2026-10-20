@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.2.1 — 2026-10-19
+
 - Remove side-panel support, its popup button, and the `sidePanel` permission.
 - Remove the Brave Container settings shortcut from the Workspace Manager; Containers remain outside HiddenTabby's workspace scope.
 - Remove the unused Preferences panel from the Workspace Manager.
