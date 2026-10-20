@@ -12,8 +12,9 @@ test("Manifest V3 permissions and declared extension pages are present", async (
   assert.match(manifest.version, /^\d+\.\d+\.\d+$/);
   assert.ok(manifest.description.length <= 132, "Chrome Web Store description must be at most 132 characters.");
   assert.deepEqual(new Set(manifest.permissions), new Set([
-    "tabs", "tabGroups", "sessions", "contextMenus", "storage", "sidePanel",
+    "tabs", "tabGroups", "sessions", "contextMenus", "storage",
   ]));
+  assert.equal(manifest.side_panel, undefined, "The extension should not declare a side panel.");
 
   const resources = [
     manifest.background.service_worker,
@@ -21,7 +22,6 @@ test("Manifest V3 permissions and declared extension pages are present", async (
     ...Object.values(manifest.icons),
     ...Object.values(manifest.action.default_icon),
     manifest.options_ui.page,
-    manifest.side_panel.default_path,
     "placeholder.html",
     "placeholder.css",
   ];

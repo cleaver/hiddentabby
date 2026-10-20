@@ -90,7 +90,7 @@ test("service worker identifies a full-page manager tab for its final-tab guard"
   assert.deepEqual(calls, [["deleteTab", 42, { managerTabId: 42 }]]);
 });
 
-test("service worker does not treat a side-panel host tab as the manager tab", async () => {
+test("service worker does not treat a non-manager sender as the manager tab", async () => {
   const { chrome, calls } = setup();
   const [accepted] = chrome.runtime.onMessage.fire(
     { type: "tab:delete", tabId: 42 },

@@ -10,7 +10,7 @@ HiddenTabby is a local-only Manifest V3 extension for Chrome and Brave. It organ
 
 On first run, HiddenTabby creates **Main** and adds existing unpinned tabs from normal windows. You can rename Main like any other group; its role is kept independently of its name. New unpinned tabs join the active group. Pinned tabs and incognito windows are excluded. A new group does not become active when created.
 
-Use the toolbar popup to switch groups or create one. Choose **Manage groups** for rename, color, ordering, deletion, and tab moves. The same manager can open in the side panel when the browser supports it.
+Use the toolbar popup to switch groups or create one. Choose **Manage groups** for rename, color, ordering, deletion, and tab moves.
 
 When only one tab from a HiddenTabby group is open in a window, HiddenTabby leaves it outside the browser's native tab group to avoid the browser's confirmation when closing that last tab. The tab remains assigned to its HiddenTabby group.
 
@@ -18,11 +18,11 @@ When only one tab from a HiddenTabby group is open in a window, HiddenTabby leav
 
 Inactive group tabs are closed so that windows can show only the selected group. Windows with pinned tabs stay open, and pinned tabs remain outside every group. A New Tab page is saved only when its group has another meaningful tab in that same logical window; New-Tab-only windows and HiddenTabby placeholders are not remembered. Empty groups keep pinned windows without extra placeholders, or retain one temporary window when no pinned window is available. Navigating its placeholder adds the page to the active group.
 
-Deleting an open tab in the Workspace Manager closes its window if that tab was the window's last tab; otherwise, only the selected tab closes. Pinned tabs keep their window open. If the full-page Workspace Manager is itself the only tab in its window, its Delete action is disabled. The optional side panel is not a browser tab, so it closes along with its host window. This is separate from group switching, which still uses a temporary placeholder when needed to keep a window usable.
+Deleting an open tab in the Workspace Manager closes its window if that tab was the window's last tab; otherwise, only the selected tab closes. Pinned tabs keep their window open. If the full-page Workspace Manager is itself the only tab in its window, its Delete action is disabled. This is separate from group switching, which still uses a temporary placeholder when needed to keep a window usable.
 
 HiddenTabby asks the browser Sessions API to restore closed tabs, then falls back to their saved URLs when no session is available. A restored page may lose unsaved form data, in-memory state, or running scripts. Closing a nonfinal normal window manually forgets the active group's tabs in that window; saved tabs from inactive groups that share the logical window remain available. Closing the final normal window preserves useful group snapshots for the next browser start. This applies only to the final window: windows closed earlier while other normal windows remained are forgotten.
 
-Group and tab metadata, including page titles and URLs, stays in `chrome.storage.local` in the current browser profile so HiddenTabby can manage and restore workspaces. HiddenTabby does not sync or upload this data to an external service. See the [Privacy Policy](PRIVACY.md). The extension requests `tabs` and `tabGroups` to inspect/manage groups, `sessions` for tab restoration, `contextMenus` for the tab-strip move action, `storage` for local persistence, and `sidePanel` for the optional manager surface.
+Group and tab metadata, including page titles and URLs, stays in `chrome.storage.local` in the current browser profile so HiddenTabby can manage and restore workspaces. HiddenTabby does not sync or upload this data to an external service. See the [Privacy Policy](PRIVACY.md). The extension requests `tabs` and `tabGroups` to inspect/manage groups, `sessions` for tab restoration, `contextMenus` for the tab-strip move action, and `storage` for local persistence.
 
 HiddenTabby manages tab workspaces only. Brave Containers are separate browser features; HiddenTabby does not detect or manage Container membership.
 
@@ -40,7 +40,7 @@ npm run test:e2e
 npm run test:e2e:brave
 ```
 
-The package command requires the system zip utility and writes `dist/HiddenTabby.zip` with the runtime extension files and MIT license. The packaged E2E commands require `unzip` and the installed Linux browsers at `/usr/bin/chromium` and `/usr/bin/brave`. They load the ZIP contents in headless browser profiles, exercise real tab/window/group/session/storage APIs, cover first-run adoption over existing native groups, enable incognito access and verify private tabs stay excluded, open and use the action popup and side-panel manager, verify service-worker idle suspension/wake, and confirm state across a browser restart. Chromium closes its final normal window and restores its dormant tabs; Brave keeps the last normal window open in this headless setup. The runs save wide and narrow manager screenshots under `test-results/` and discard their profiles.
+The package command requires the system zip utility and writes `dist/HiddenTabby.zip` with the runtime extension files and MIT license. The packaged E2E commands require `unzip` and the installed Linux browsers at `/usr/bin/chromium` and `/usr/bin/brave`. They load the ZIP contents in headless browser profiles, exercise real tab/window/group/session/storage APIs, cover first-run adoption over existing native groups, enable incognito access and verify private tabs stay excluded, open and use the action popup and full-page manager, verify service-worker idle suspension/wake, and confirm state across a browser restart. Chromium closes its final normal window and restores its dormant tabs; Brave keeps the last normal window open in this headless setup. The runs save wide and narrow manager screenshots under `test-results/` and discard their profiles.
 
 Toolbar and extension-list icons are generated in `icons/` from the source illustration `hidden-tabby.png`; the workspace manager uses a high-resolution variant. Runtime icons are included in the package.
 
@@ -60,7 +60,7 @@ gh attestation verify HiddenTabby.zip \
 
 The SHA-256 checksum is a fingerprint: checking it confirms that your downloaded ZIP matches the published checksum, but it does not identify the ZIP's source. The GitHub artifact attestation is a signed build record that links the ZIP to this repository, the source revision associated with the release tag, and the workflow that built it. Verifying both gives evidence that the ZIP came from this release's source and build process. This is not a code review or a guarantee that the code is bug-free or secure; the source, maintainer account, and build service still require trust. Review the tagged source and workflow if you want to assess the code yourself.
 
-Run `npm run test:e2e` for packaged Chromium checks and `npm run test:e2e:brave` for Brave. Reload the unpacked extension after editing files. The suite tests the extension in disposable headless browser profiles; separate headed checks have clicked the toolbar icon, dismissed the popup with Escape, selected a native tab-strip move destination, and opened the side-panel manager in Chromium and Brave. Initial support targets Linux, with Chromium as the Chrome proxy and a separate Brave run.
+Run `npm run test:e2e` for packaged Chromium checks and `npm run test:e2e:brave` for Brave. Reload the unpacked extension after editing files. The suite tests the extension in disposable headless browser profiles; separate headed checks have clicked the toolbar icon, dismissed the popup with Escape, selected a native tab-strip move destination, and opened the full-page manager in Chromium and Brave. Initial support targets Linux, with Chromium as the Chrome proxy and a separate Brave run.
 
 ## License
 

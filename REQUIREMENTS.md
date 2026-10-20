@@ -20,7 +20,7 @@ Build one Manifest V3 extension for Chrome and Brave that brings the main tab-or
 - Make group definitions available across browser windows. Treat a switch as global: close tabs in inactive groups across normal windows and restore the selected group's tabs in their original windows.
 - Keep windows open across global switches with the temporary New Tab placeholder described above; it is not group content or a saved tab.
 - Avoid Chromium's native “Close tab and delete group?” prompt when closing a group's last tab in a window. Apply native tab grouping only when at least two unpinned tabs from the same HiddenTabby group are open in that window. Keep singleton tabs logically assigned to HiddenTabby but native-ungrouped; regroup when a second tab joins. Closing the singleton removes that tab/window's membership while leaving the HiddenTabby group intact.
-- Use the toolbar popup for group switching and provide a link from it to a full-page manager for group management. Offer the side panel as an additional option; full management must not depend on it.
+- Use the toolbar popup for group switching and provide a link from it to a full-page manager for group management.
 
 ## Platform Constraint
 
@@ -36,7 +36,7 @@ Search and keyboard navigation, drag-and-drop, group sorting, JSON backup and re
 
 ## Technical Validation Items
 
-1. Confirm pinned-tab exclusion, session restoration, global switching, tab-strip context menus, and side-panel support in target Chromium and Brave versions, using Chromium as the accepted Chrome testing proxy.
+1. Confirm pinned-tab exclusion, session restoration, global switching, and tab-strip context menus in target Chromium and Brave versions, using Chromium as the accepted Chrome testing proxy.
 
 ## Deletion and Active Group Behavior
 
@@ -46,7 +46,6 @@ Search and keyboard navigation, drag-and-drop, group sorting, JSON backup and re
 
 - Deleting an open tab in the Workspace Manager closes and permanently removes that tab. If it was the last browser tab in its normal window, close that window instead of creating a HiddenTabby placeholder. Any other live tab, including a pinned tab, keeps the window open; pinned tabs remain untouched.
 - If the full-page Workspace Manager tab is the only tab in its window, disable its own Delete button so the user cannot close the manager out from under themselves. The service worker must also reject a stale delete request if the tab/window state changes after the UI was rendered.
-- The side panel is not a browser tab; if its host window loses its last tab, the window and side panel close together.
 - Deleting a saved tab from an inactive group removes only that saved record and does not close a live window. Deleted tabs must not return on a later group switch; preserve unrelated saved tabs in other groups even if they refer to the same logical window.
 - This rule applies only to the Workspace Manager Delete action. Group switching continues to use temporary placeholders for browser continuity, and closing tabs from the browser tab strip follows the browser's normal window-close behavior.
 
@@ -57,7 +56,7 @@ Search and keyboard navigation, drag-and-drop, group sorting, JSON backup and re
 - Support Linux for the initial release; defer Windows and macOS verification.
 - Use Chromium as the accepted proxy for Chrome verification; require separate Brave checks. A Google Chrome installation/run is not an initial release gate.
 - Target current stable Chrome and Brave releases and releases from roughly the preceding three months; set exact minimum versions at release time.
-- Request only the `tabs`, `tabGroups`, `sessions`, `contextMenus`, and `storage` permissions needed by the feature set. The optional side panel additionally needs `sidePanel`; the popup and full-page manager remain available without it. Explain that `sessions` restores closed group tabs and `contextMenus` adds the tab-strip move action.
+- Request only the `tabs`, `tabGroups`, `sessions`, `contextMenus`, and `storage` permissions needed by the feature set. Explain that `sessions` restores closed group tabs and `contextMenus` adds the tab-strip move action.
 
 ## References
 
@@ -65,6 +64,5 @@ Search and keyboard navigation, drag-and-drop, group sorting, JSON backup and re
 - [Chrome tab groups API](https://developer.chrome.com/docs/extensions/reference/api/tabGroups)
 - [Chrome context menus API](https://developer.chrome.com/docs/extensions/reference/api/contextMenus)
 - [Chrome tabs API](https://developer.chrome.com/docs/extensions/reference/api/tabs)
-- [Chrome side panel API](https://developer.chrome.com/docs/extensions/reference/api/sidePanel)
 - [Chrome sessions API](https://developer.chrome.com/docs/extensions/reference/api/sessions)
 - [Brave extension support](https://support.brave.com/hc/en-us/articles/360017909112-How-can-I-add-extensions-to-Brave)

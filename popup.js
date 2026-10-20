@@ -3,7 +3,6 @@ const statusElement = document.querySelector("#status");
 const windowCountElement = document.querySelector("#window-count");
 const createForm = document.querySelector("#create-form");
 const nameInput = document.querySelector("#group-name");
-const sidePanelButton = document.querySelector("#open-side-panel");
 let stateLoadGeneration = 0;
 
 async function sendCommand(type, values = {}) {
@@ -102,18 +101,5 @@ createForm.addEventListener("submit", async (event) => {
 document.querySelector("#open-manager").addEventListener("click", () => {
   chrome.tabs.create({ url: chrome.runtime.getURL("manager.html") });
 });
-
-if (chrome.sidePanel?.open) {
-  sidePanelButton.hidden = false;
-  sidePanelButton.addEventListener("click", async () => {
-    try {
-      const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-      if (!tab || !Number.isInteger(tab.windowId)) throw new Error("Open a normal browser window first.");
-      await chrome.sidePanel.open({ windowId: tab.windowId });
-    } catch (error) {
-      setStatus(error.message, "error");
-    }
-  });
-}
 
 void loadState();

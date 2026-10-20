@@ -158,7 +158,7 @@ test("popup group rows truncate long names without horizontal overflow", { timeo
         };
       })
     )()`);
-    assert.deepEqual(footerActions.map((button) => button.label), ["Manage groups", "Open side panel"]);
+    assert.deepEqual(footerActions.map((button) => button.label), ["Manage groups"]);
     assert.ok(footerActions.every((button) => button.borderStyle === "solid"
       && Number.parseFloat(button.borderWidth) > 0
       && button.background !== "rgba(0, 0, 0, 0)"

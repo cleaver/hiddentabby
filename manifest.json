@@ -9,7 +9,7 @@
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
   },
-  "permissions": ["tabs", "tabGroups", "sessions", "contextMenus", "storage", "sidePanel"],
+  "permissions": ["tabs", "tabGroups", "sessions", "contextMenus", "storage"],
   "background": {
     "service_worker": "src/service-worker.js",
     "type": "module"
@@ -26,8 +26,5 @@
   "options_ui": {
     "page": "manager.html",
     "open_in_tab": true
-  },
-  "side_panel": {
-    "default_path": "manager.html"
   }
 }

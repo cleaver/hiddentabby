@@ -10,7 +10,7 @@
 
 HiddenTabby organizes unpinned tabs into named workspaces shared across your normal browser windows. Switch workspaces from the toolbar popup to close the current group's tabs and restore another group's tabs. The browser may not preserve unsaved form data, in-memory state, or running scripts when tabs are restored.
 
-Create, rename, reorder, and color groups in the full-page manager. Move tabs from the browser's tab context menu or the manager. Use the popup, full-page manager, or side panel to manage workspaces. Pinned tabs and incognito windows are excluded. Group names, tab titles, and URLs stay in this browser profile; HiddenTabby does not sync or upload them to an external service.
+Create, rename, reorder, and color groups in the full-page manager. Move tabs from the browser's tab context menu or the manager. Use the popup to switch groups and the full-page manager to organize them. Pinned tabs and incognito windows are excluded. Group names, tab titles, and URLs stay in this browser profile; HiddenTabby does not sync or upload them to an external service.
 
 **Privacy policy:** `https://github.com/cleaver/hiddentabby/blob/main/PRIVACY.md`
 
@@ -23,7 +23,6 @@ Create, rename, reorder, and color groups in the full-page manager. Move tabs fr
 - `sessions`: restore tabs closed during workspace switching.
 - `contextMenus`: add the tab-strip action for moving a tab to a workspace.
 - `storage`: save workspace and tab metadata locally in the browser profile.
-- `sidePanel`: offer the workspace manager in the browser side panel.
 
 There are no host permissions.
 

@@ -266,45 +266,45 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
       "first-run Main group",
     );
     const persistedState = await popup.client.evaluate("chrome.storage.local.get('hiddentabby.state').then((values)=>values['hiddentabby.state'])");
-    const popupCapabilities = await popup.client.evaluate("({sidePanel:Boolean(chrome.sidePanel?.open),sidePanelButtonHidden:document.querySelector('#open-side-panel').hidden})");
+    const popupCapabilities = await popup.client.evaluate("({managerButton:Boolean(document.querySelector('#open-manager')),sidePanelButton:document.querySelector('#open-side-panel')})");
     assert.equal(initialState.groups.length, 1);
     let defaultGroup = initialState.groups[0];
     assert.equal(initialState.activeGroupId, defaultGroup.id);
     assert.ok(initialState.tabs.some((tab) => tab.url === "about:blank"), "First-run tabs should join Main.");
     assert.equal(persistedState.activeGroupId, defaultGroup.id, "First-run state should be stored in chrome.storage.local.");
-    assert.equal(popupCapabilities.sidePanel, true);
-    assert.equal(popupCapabilities.sidePanelButtonHidden, false);
+    assert.equal(popupCapabilities.managerButton, true);
+    assert.equal(popupCapabilities.sidePanelButton, null);
 
-    const sidePanelButtonPoint = await popup.client.evaluate("(() => { const rect=document.querySelector('#open-side-panel').getBoundingClientRect(); return {x:rect.left+rect.width/2,y:rect.top+rect.height/2}; })()");
+    const managerButtonPoint = await popup.client.evaluate("(() => { const rect=document.querySelector('#open-manager').getBoundingClientRect(); return {x:rect.left+rect.width/2,y:rect.top+rect.height/2}; })()");
     await popup.client.send("Input.dispatchMouseEvent", {
-      type: "mouseMoved", x: sidePanelButtonPoint.x, y: sidePanelButtonPoint.y,
+      type: "mouseMoved", x: managerButtonPoint.x, y: managerButtonPoint.y,
     });
     await popup.client.send("Input.dispatchMouseEvent", {
-      type: "mousePressed", x: sidePanelButtonPoint.x, y: sidePanelButtonPoint.y, button: "left", clickCount: 1,
+      type: "mousePressed", x: managerButtonPoint.x, y: managerButtonPoint.y, button: "left", clickCount: 1,
     });
     await popup.client.send("Input.dispatchMouseEvent", {
-      type: "mouseReleased", x: sidePanelButtonPoint.x, y: sidePanelButtonPoint.y, button: "left", clickCount: 1,
+      type: "mouseReleased", x: managerButtonPoint.x, y: managerButtonPoint.y, button: "left", clickCount: 1,
     });
-    const sidePanelTarget = await waitFor(async () => (await browserTargets(endpointUrl))
+    const managerTarget = await waitFor(async () => (await browserTargets(endpointUrl))
       .find((target) => target.type === "page" && target.url.endsWith("/manager.html")) ?? null,
-    Boolean, "side-panel manager page opened by the popup action");
-    const sidePanelClient = await DevToolsClient.connect(sidePanelTarget.webSocketDebuggerUrl);
-    browserClients.push(sidePanelClient);
-    const sidePanelHeading = await waitFor(
-      () => sidePanelClient.evaluate("document.querySelector('h1')?.textContent ?? null"),
+    Boolean, "full-page manager opened by the popup action");
+    const workspaceManagerClient = await DevToolsClient.connect(managerTarget.webSocketDebuggerUrl);
+    browserClients.push(workspaceManagerClient);
+    const managerHeading = await waitFor(
+      () => workspaceManagerClient.evaluate("document.querySelector('h1')?.textContent ?? null"),
       (value) => value === "HiddenTabby",
-      "side-panel manager heading",
+      "full-page manager heading",
     );
-    assert.equal(sidePanelHeading, "HiddenTabby");
-    await sidePanelClient.send("Emulation.setDeviceMetricsOverride", {
-      width: 320, height: 900, deviceScaleFactor: 1, mobile: false,
+    assert.equal(managerHeading, "HiddenTabby");
+    await workspaceManagerClient.send("Emulation.setDeviceMetricsOverride", {
+      width: 1024, height: 900, deviceScaleFactor: 1, mobile: false,
     });
     await waitFor(
-      () => sidePanelClient.evaluate('Boolean(document.querySelector(".group-card .color-palette"))'),
+      () => workspaceManagerClient.evaluate('Boolean(document.querySelector(".group-card .color-palette"))'),
       Boolean,
-      "side-panel color palette rendered",
+      "workspace manager color palette rendered",
     );
-    const initialColorPalette = await sidePanelClient.evaluate(`(() => {
+    const initialColorPalette = await workspaceManagerClient.evaluate(`(() => {
       const card = [...document.querySelectorAll(".group-card")]
         .find((item) => item.querySelector(".group-title")?.textContent === "Main");
       const palette = card?.querySelector(".color-palette");
@@ -316,13 +316,13 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
       });
       return { width: box.width, scrollWidth: palette.scrollWidth, clientWidth: palette.clientWidth, choices };
     })()`);
-    assert.ok(initialColorPalette, "The side panel should keep the group color choices visible.");
+    assert.ok(initialColorPalette, "The workspace manager should keep the group color choices visible.");
     assert.equal(initialColorPalette.choices.length, 9);
     assert.ok(initialColorPalette.choices.every((choice) => choice.width >= 28 && choice.height >= 28),
-      "Each color should have a usable target at side-panel width: " + JSON.stringify(initialColorPalette));
+      "Each color should have a usable target in the workspace manager: " + JSON.stringify(initialColorPalette));
     assert.ok(initialColorPalette.scrollWidth <= initialColorPalette.clientWidth,
-      "The color palette should fit in the side panel: " + JSON.stringify(initialColorPalette));
-    await sidePanelClient.evaluate(`(() => {
+      "The color palette should fit in the workspace manager: " + JSON.stringify(initialColorPalette));
+    await workspaceManagerClient.evaluate(`(() => {
       const purple = [...document.querySelectorAll(".group-card")]
         .find((item) => item.querySelector(".group-title")?.textContent === "Main")
         ?.querySelector('.color-palette input[value="purple"]');
@@ -330,7 +330,7 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
       purple.click();
     })()`);
     const recoloredMain = await waitFor(
-      () => sidePanelClient.evaluate(`(async () => {
+      () => workspaceManagerClient.evaluate(`(async () => {
         const response = await chrome.runtime.sendMessage({type:"state:get"});
         const state = response?.value;
         const group = state?.groups.find((item) => item.name === "Main");
@@ -341,12 +341,19 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
           selected: palette?.querySelector('input[type="radio"]:checked')?.value };
       })()`),
       (result) => result?.color === "purple" && result.choiceCount === 9 && result.selected === "purple",
-      "persistent side-panel color selection",
+      "persistent workspace-manager color selection",
     );
     assert.equal(recoloredMain.color, "purple");
-    const containerControls = await sidePanelClient.evaluate("({card:document.querySelector('#brave-container-card'),settingsLink:document.querySelector('#open-brave-container-settings'),helpLink:document.querySelector('#brave-containers-help')})");
+    const containerControls = await workspaceManagerClient.evaluate("({card:document.querySelector('#brave-container-card'),settingsLink:document.querySelector('#open-brave-container-settings'),helpLink:document.querySelector('#brave-containers-help')})");
     assert.deepEqual(containerControls, { card: null, settingsLink: null, helpLink: null },
       "The Workspace Manager should not expose Brave Container controls.");
+    const managerTabId = await workspaceManagerClient.evaluate("chrome.tabs.getCurrent().then((tab)=>tab.id)");
+    await browserClient.send("Target.closeTarget", { targetId: managerTarget.id });
+    await waitFor(
+      () => readState(popup.client),
+      (state) => !state.tabs.some((tab) => tab.browserTabId === managerTabId),
+      "full-page manager test tab cleanup",
+    );
 
     const controllerTab = await popup.client.evaluate("chrome.tabs.getCurrent().then((tab) => ({id:tab.id,windowId:tab.windowId}))");
     await popup.client.evaluate("chrome.tabs.update(" + controllerTab.id + ", {pinned:true})");
@@ -1671,7 +1678,7 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
     assert.ok(finalState.windows.filter((window) => window.isOpen).every((window) =>
       window.pinnedTabIds.length > 0 || Number.isInteger(window.placeholderTabId)));
 
-    const finalBrowserEvidence = await popup.client.evaluate("(async () => { const state=(await chrome.runtime.sendMessage({type:'state:get'})).value; const tabs=await chrome.tabs.query({}); const recent=await chrome.sessions.getRecentlyClosed({maxResults:25}); return {groups:state.groups,tabs:state.tabs,windowCount:state.windows.filter((item)=>item.isOpen).length,placeholders:state.windows.filter((item)=>item.isOpen).map((item)=>item.placeholderTabId),windowDetails:state.windows.filter((item)=>item.isOpen).map(({id,browserWindowId,pinnedTabIds,placeholderTabId})=>({id,browserWindowId,pinnedTabIds,placeholderTabId})),pinned:tabs.filter((tab)=>tab.pinned).length,recentTabSessions:recent.filter((session)=>session.tab).length,sidePanelSupported:Boolean(chrome.sidePanel?.open)}; })()");
+    const finalBrowserEvidence = await popup.client.evaluate("(async () => { const state=(await chrome.runtime.sendMessage({type:'state:get'})).value; const tabs=await chrome.tabs.query({}); const recent=await chrome.sessions.getRecentlyClosed({maxResults:25}); return {groups:state.groups,tabs:state.tabs,windowCount:state.windows.filter((item)=>item.isOpen).length,placeholders:state.windows.filter((item)=>item.isOpen).map((item)=>item.placeholderTabId),windowDetails:state.windows.filter((item)=>item.isOpen).map(({id,browserWindowId,pinnedTabIds,placeholderTabId})=>({id,browserWindowId,pinnedTabIds,placeholderTabId})),pinned:tabs.filter((tab)=>tab.pinned).length,recentTabSessions:recent.filter((session)=>session.tab).length}; })()");
     assert.equal(finalBrowserEvidence.groups[0].name, "Main");
     assert.equal(finalBrowserEvidence.tabs.length, 0);
     assert.equal(finalBrowserEvidence.windowCount, 2,
@@ -1774,7 +1781,6 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
     t.diagnostic("Loaded artifact: " + archive);
     t.diagnostic("Extension id: " + extensionId);
     t.diagnostic("Recent closed tab sessions exposed by Chromium: " + finalBrowserEvidence.recentTabSessions);
-    t.diagnostic("Side panel API present: " + finalBrowserEvidence.sidePanelSupported);
     t.diagnostic("Screenshot: " + join(artifactDirectory, screenshotName + "-manager.png"));
   } catch (error) {
     testError = error;
