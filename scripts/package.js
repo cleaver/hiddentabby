@@ -22,6 +22,7 @@ const extensionFiles = [
   "icons/icon32.png",
   "icons/icon48.png",
   "icons/icon128.png",
+  "assets/cat-paw-pointer.png",
   "src/service-worker.js",
   "src/chrome-browser.js",
   "src/group-state.js",

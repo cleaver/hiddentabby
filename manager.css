@@ -355,17 +355,60 @@ a {
   font-size: 14px;
 }
 
+.pin-demo-sparkles {
+  position: absolute;
+  z-index: 4;
+  top: 137.5px;
+  right: 9px;
+  width: 52px;
+  height: 52px;
+  pointer-events: none;
+  opacity: 0;
+  transform: scale(.3) rotate(-12deg);
+  animation: pin-sparkle-burst 5s ease-out infinite;
+}
+
+.sparkle-main {
+  fill: #ffe17b;
+  filter: drop-shadow(0 0 3px rgb(255 225 123 / 75%));
+}
+
+.sparkle-small {
+  fill: #9fe8ca;
+}
+
+.sparkle-dot {
+  fill: #fff2bf;
+}
+
 .pin-demo-paw {
   position: absolute;
-  z-index: 3;
-  top: 1px;
+  z-index: 5;
+  top: -8px;
   right: 4px;
-  width: 40px;
-  height: 48px;
+  width: 60px;
+  height: 90px;
   filter: drop-shadow(0 2px 2px rgb(0 0 0 / 45%));
   pointer-events: none;
-  transform-origin: 65% 25%;
+  transform-origin: 50% 32%;
   animation: pin-paw-journey 5s cubic-bezier(.35, 0, .2, 1) infinite;
+}
+
+.pin-demo-paw img {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.pin-demo-paw-hotspot {
+  position: absolute;
+  top: 32%;
+  left: 50%;
+  width: 2px;
+  height: 2px;
+  border-radius: 50%;
+  opacity: 0;
+  transform: translate(-50%, -50%);
 }
 
 .pin-demo.is-paused *,
@@ -385,11 +428,18 @@ a {
 }
 
 @keyframes pin-paw-journey {
-  0%, 18% { transform: translate(0, 0) rotate(-8deg); }
-  39% { transform: translate(-10px, 132px) rotate(0); }
-  44%, 49% { transform: translate(-10px, 132px) rotate(-10deg) scale(.9); }
-  54% { transform: translate(-10px, 132px) rotate(0) scale(1); }
-  68%, 100% { transform: translate(0, 0) rotate(-8deg); }
+  0%, 18% { transform: translate(10px, 0) rotate(-8deg); }
+  39% { transform: translate(-1px, 143px) rotate(0); }
+  44%, 49% { transform: translate(-1px, 143px) rotate(-10deg) scale(.9); }
+  54% { transform: translate(-1px, 143px) rotate(0) scale(1); }
+  68%, 100% { transform: translate(10px, 0) rotate(-8deg); }
+}
+
+@keyframes pin-sparkle-burst {
+  0%, 41%, 59%, 100% { opacity: 0; transform: scale(.3) rotate(-12deg); }
+  44% { opacity: 1; transform: scale(.8) rotate(0); }
+  49% { opacity: 1; transform: scale(1.05) rotate(7deg); }
+  55% { opacity: 0; transform: scale(1.25) rotate(14deg); }
 }
 
 @keyframes pin-confirm {
@@ -1052,6 +1102,7 @@ a:focus-visible {
   .pin-demo-pinned-icon,
   .pin-demo-menu,
   .pin-demo-pin,
+  .pin-demo-sparkles,
   .pin-demo-paw {
     animation: none;
   }
@@ -1072,6 +1123,10 @@ a:focus-visible {
   }
 
   .pin-demo-paw {
+    display: none;
+  }
+
+  .pin-demo-sparkles {
     display: none;
   }
 }

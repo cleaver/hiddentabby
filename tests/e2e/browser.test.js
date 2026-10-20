@@ -310,10 +310,12 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
         const guide = document.querySelector("#pin-guide");
         const scene = document.querySelector("#pin-animation");
         const paw = document.querySelector(".pin-demo-paw");
+        const pointerImage = paw.querySelector("img");
         const controls = document.querySelector("#pin-animation-control");
         const stored = await chrome.storage.local.get("hiddentabby.pinOnboarding");
         return { isOnToolbar: userSettings.isOnToolbar, visible: !guide.hidden,
           sceneWidth: scene.getBoundingClientRect().width, paw: Boolean(paw),
+          imageLoaded: pointerImage.complete && pointerImage.naturalWidth === 1024,
           pauseText: controls.textContent.trim(), preference: stored["hiddentabby.pinOnboarding"] ?? null };
       })()`),
       (state) => typeof state?.isOnToolbar === "boolean" && state.preference !== null,
@@ -324,6 +326,7 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
     if (pinGuideState.visible) {
       assert.ok(pinGuideState.sceneWidth > 0, "The non-modal pin guide scene should be visible.");
       assert.equal(pinGuideState.paw, true, "The animation should show the orange paw acting as the pointer.");
+      assert.equal(pinGuideState.imageLoaded, true, "The supplied transparent paw pointer should load at full resolution.");
       assert.equal(pinGuideState.pauseText, "Pause animation");
       assert.equal(pinGuideState.preference.dismissed, false);
       await workspaceManagerClient.send("Emulation.setDeviceMetricsOverride", {
@@ -346,18 +349,33 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
           animation.pause();
           animation.currentTime = 2200;
         }
-        const paw = document.querySelector(".pin-demo-paw").getBoundingClientRect();
+        const hotspot = document.querySelector(".pin-demo-paw-hotspot").getBoundingClientRect();
         const pin = document.querySelector(".pin-demo-pin").getBoundingClientRect();
+        const sparkles = document.querySelector(".pin-demo-sparkles");
+        const sparkleRect = sparkles.getBoundingClientRect();
         const menu = document.querySelector(".pin-demo-menu");
+        const pinX = pin.left + pin.width / 2;
+        const pinY = pin.top + pin.height / 2;
+        const hotspotX = hotspot.left + hotspot.width / 2;
+        const hotspotY = hotspot.top + hotspot.height / 2;
+        const sparkleX = sparkleRect.left + sparkleRect.width / 2;
+        const sparkleY = sparkleRect.top + sparkleRect.height / 2;
         return { menuVisibility:getComputedStyle(menu).visibility, menuOpacity:getComputedStyle(menu).opacity,
-          distance:Math.hypot(paw.left + paw.width / 2 - (pin.left + pin.width / 2),
-            paw.top + paw.height / 2 - (pin.top + pin.height / 2)), animationCount:animations.size };
+          hotspotOffset:{x:hotspotX - pinX, y:hotspotY - pinY},
+          sparkleOffset:{x:sparkleX - pinX, y:sparkleY - pinY},
+          hotspotDistance:Math.hypot(hotspotX - pinX, hotspotY - pinY),
+          sparkleDistance:Math.hypot(sparkleX - pinX, sparkleY - pinY),
+          sparkleOpacity:getComputedStyle(sparkles).opacity, animationCount:animations.size };
       })()`);
       assert.equal(animationTarget.menuVisibility, "visible");
       assert.equal(animationTarget.menuOpacity, "1");
-      assert.ok(animationTarget.animationCount >= 4, "The puzzle, menu, paw, pin, and toolbar icon should animate.");
-      assert.ok(animationTarget.distance <= 14,
-        "The orange paw should land on the pin control: " + JSON.stringify(animationTarget));
+      assert.ok(animationTarget.animationCount >= 6,
+        "The puzzle, menu, pointer, sparkles, pin, and toolbar icon should animate.");
+      assert.ok(animationTarget.hotspotDistance <= 2,
+        "The supplied paw's click point should land on the pin control: " + JSON.stringify(animationTarget));
+      assert.equal(animationTarget.sparkleOpacity, "1", "Sparkles should appear at the click point.");
+      assert.ok(animationTarget.sparkleDistance <= 2,
+        "The click sparkles should surround the pin control: " + JSON.stringify(animationTarget));
       const onboardingScreenshot = await workspaceManagerClient.send("Page.captureScreenshot", {
         format: "png", captureBeyondViewport: false,
       });
@@ -377,10 +395,12 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
         menuOpacity:getComputedStyle(document.querySelector(".pin-demo-menu")).opacity,
         iconOpacity:getComputedStyle(document.querySelector(".pin-demo-pinned-icon")).opacity,
         pawDisplay:getComputedStyle(document.querySelector(".pin-demo-paw")).display,
+        sparkleDisplay:getComputedStyle(document.querySelector(".pin-demo-sparkles")).display,
         pauseDisplay:getComputedStyle(document.querySelector("#pin-animation-control")).display,
       }))()`);
       assert.deepEqual(reducedMotionPinGuide, {
-        menuVisibility: "visible", menuOpacity: "1", iconOpacity: "1", pawDisplay: "none", pauseDisplay: "none",
+        menuVisibility: "visible", menuOpacity: "1", iconOpacity: "1", pawDisplay: "none",
+        sparkleDisplay: "none", pauseDisplay: "none",
       }, "Reduced-motion users should see the final pinned state without animation.");
       await workspaceManagerClient.send("Emulation.setEmulatedMedia", { features: [] });
       await workspaceManagerClient.evaluate(`document.querySelector("#pin-animation-control").click()`);

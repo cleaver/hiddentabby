@@ -63,6 +63,12 @@ test("extension pages use local scripts and safe DOM text APIs", async () => {
   assert.match(manager, /id="pin-guide-dismiss"[^>]*type="checkbox"/);
   assert.match(manager, /id="pin-animation"[^>]*role="img"/);
   assert.match(manager, /class="pin-demo-paw"/, "The guide should use an orange cat paw to demonstrate the click.");
+  assert.match(manager, /src="assets\/cat-paw-pointer\.png"/);
+  assert.match(manager, /class="pin-demo-sparkles"/, "The pointer click should have visual feedback.");
+  const pointerImage = await readFile(resolve(root, "assets/cat-paw-pointer.png"));
+  assert.equal(pointerImage.readUInt32BE(16), 1024, "The pointer artwork should retain its source resolution.");
+  assert.equal(pointerImage.readUInt32BE(20), 1536, "The pointer artwork should retain its source proportions.");
+  assert.equal(pointerImage[25], 6, "The pointer artwork should retain its transparent background.");
 
   const managerScript = await readFile(resolve(root, "manager.js"), "utf8");
   assert.match(managerScript, /getUserSettings\(\)/, "The guide should use the browser's toolbar visibility setting.");
@@ -73,5 +79,6 @@ test("extension pages use local scripts and safe DOM text APIs", async () => {
 
   const styles = await readFile(resolve(root, "manager.css"), "utf8");
   assert.match(styles, /@keyframes pin-paw-journey/);
+  assert.match(styles, /@keyframes pin-sparkle-burst/);
   assert.match(styles, /prefers-reduced-motion: reduce/);
 });

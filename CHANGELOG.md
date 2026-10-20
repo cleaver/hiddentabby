@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Add a non-blocking toolbar pinning guide with a short, dismissible cat-paw animation that hides while pinned and respects reduced-motion settings.
+- Add a non-blocking toolbar pinning guide with a short, dismissible cat-paw pointer animation and sparkle click effect; hide it while pinned and respect reduced-motion settings.
 
 ## 0.2.1 — 2026-10-19
 
