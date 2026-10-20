@@ -304,6 +304,114 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
       Boolean,
       "workspace manager color palette rendered",
     );
+    const pinGuideState = await waitFor(
+      () => workspaceManagerClient.evaluate(`(async () => {
+        const userSettings = await chrome.action.getUserSettings();
+        const guide = document.querySelector("#pin-guide");
+        const scene = document.querySelector("#pin-animation");
+        const paw = document.querySelector(".pin-demo-paw");
+        const controls = document.querySelector("#pin-animation-control");
+        const stored = await chrome.storage.local.get("hiddentabby.pinOnboarding");
+        return { isOnToolbar: userSettings.isOnToolbar, visible: !guide.hidden,
+          sceneWidth: scene.getBoundingClientRect().width, paw: Boolean(paw),
+          pauseText: controls.textContent.trim(), preference: stored["hiddentabby.pinOnboarding"] ?? null };
+      })()`),
+      (state) => typeof state?.isOnToolbar === "boolean" && state.preference !== null,
+      "pin onboarding state to initialize",
+    );
+    assert.equal(pinGuideState.visible, !pinGuideState.isOnToolbar,
+      "The pin guide should appear only while HiddenTabby is not on the toolbar.");
+    if (pinGuideState.visible) {
+      assert.ok(pinGuideState.sceneWidth > 0, "The non-modal pin guide scene should be visible.");
+      assert.equal(pinGuideState.paw, true, "The animation should show the orange paw acting as the pointer.");
+      assert.equal(pinGuideState.pauseText, "Pause animation");
+      assert.equal(pinGuideState.preference.dismissed, false);
+      await workspaceManagerClient.send("Emulation.setDeviceMetricsOverride", {
+        width: 390, height: 844, deviceScaleFactor: 1, mobile: false,
+      });
+      const narrowPinGuide = await workspaceManagerClient.evaluate(`({
+        viewport:window.innerWidth,content:document.documentElement.scrollWidth,
+        sceneWidth:document.querySelector("#pin-animation").getBoundingClientRect().width,
+      })`);
+      assert.ok(narrowPinGuide.sceneWidth > 0 && narrowPinGuide.content <= narrowPinGuide.viewport,
+        "The pin guide should remain usable on a narrow manager viewport: " + JSON.stringify(narrowPinGuide));
+      await workspaceManagerClient.send("Emulation.setDeviceMetricsOverride", {
+        width: 1024, height: 900, deviceScaleFactor: 1, mobile: false,
+      });
+      const animationTarget = await workspaceManagerClient.evaluate(`(() => {
+        const scene = document.querySelector("#pin-animation");
+        const animations = new Set([...scene.querySelectorAll("*")]
+          .flatMap((element) => element.getAnimations()));
+        for (const animation of animations) {
+          animation.pause();
+          animation.currentTime = 2200;
+        }
+        const paw = document.querySelector(".pin-demo-paw").getBoundingClientRect();
+        const pin = document.querySelector(".pin-demo-pin").getBoundingClientRect();
+        const menu = document.querySelector(".pin-demo-menu");
+        return { menuVisibility:getComputedStyle(menu).visibility, menuOpacity:getComputedStyle(menu).opacity,
+          distance:Math.hypot(paw.left + paw.width / 2 - (pin.left + pin.width / 2),
+            paw.top + paw.height / 2 - (pin.top + pin.height / 2)), animationCount:animations.size };
+      })()`);
+      assert.equal(animationTarget.menuVisibility, "visible");
+      assert.equal(animationTarget.menuOpacity, "1");
+      assert.ok(animationTarget.animationCount >= 4, "The puzzle, menu, paw, pin, and toolbar icon should animate.");
+      assert.ok(animationTarget.distance <= 14,
+        "The orange paw should land on the pin control: " + JSON.stringify(animationTarget));
+      const onboardingScreenshot = await workspaceManagerClient.send("Page.captureScreenshot", {
+        format: "png", captureBeyondViewport: false,
+      });
+      await mkdir(artifactDirectory, { recursive: true });
+      await writeFile(join(artifactDirectory, "pin-onboarding.png"), Buffer.from(onboardingScreenshot.data, "base64"));
+      await workspaceManagerClient.evaluate(`(() => {
+        const scene = document.querySelector("#pin-animation");
+        const animations = new Set([...scene.querySelectorAll("*")]
+          .flatMap((element) => element.getAnimations()));
+        animations.forEach((animation) => animation.play());
+      })()`);
+      await workspaceManagerClient.send("Emulation.setEmulatedMedia", {
+        features: [{ name: "prefers-reduced-motion", value: "reduce" }],
+      });
+      const reducedMotionPinGuide = await workspaceManagerClient.evaluate(`(() => ({
+        menuVisibility:getComputedStyle(document.querySelector(".pin-demo-menu")).visibility,
+        menuOpacity:getComputedStyle(document.querySelector(".pin-demo-menu")).opacity,
+        iconOpacity:getComputedStyle(document.querySelector(".pin-demo-pinned-icon")).opacity,
+        pawDisplay:getComputedStyle(document.querySelector(".pin-demo-paw")).display,
+        pauseDisplay:getComputedStyle(document.querySelector("#pin-animation-control")).display,
+      }))()`);
+      assert.deepEqual(reducedMotionPinGuide, {
+        menuVisibility: "visible", menuOpacity: "1", iconOpacity: "1", pawDisplay: "none", pauseDisplay: "none",
+      }, "Reduced-motion users should see the final pinned state without animation.");
+      await workspaceManagerClient.send("Emulation.setEmulatedMedia", { features: [] });
+      await workspaceManagerClient.evaluate(`document.querySelector("#pin-animation-control").click()`);
+      const pausedAnimation = await waitFor(
+        () => workspaceManagerClient.evaluate(`({paused:document.querySelector("#pin-animation").classList.contains("is-paused"),
+          pressed:document.querySelector("#pin-animation-control").getAttribute("aria-pressed"),
+          label:document.querySelector("#pin-animation-control").textContent.trim()})`),
+        (state) => state.paused && state.pressed === "true" && state.label === "Play animation",
+        "pin animation pause control",
+      );
+      assert.equal(pausedAnimation.paused, true);
+      await workspaceManagerClient.evaluate(`document.querySelector("#pin-animation-control").click()`);
+      await workspaceManagerClient.evaluate(`document.querySelector("#pin-guide-dismiss").click()`);
+      await waitFor(
+        () => workspaceManagerClient.evaluate("document.querySelector('#pin-guide').hidden"),
+        Boolean,
+        "pin guide dismissal",
+      );
+      const dismissedPinGuide = await workspaceManagerClient.evaluate(
+        "chrome.storage.local.get('hiddentabby.pinOnboarding').then((values)=>values['hiddentabby.pinOnboarding'])",
+      );
+      assert.deepEqual(dismissedPinGuide, { dismissed: true, isOnToolbar: false },
+        "Dismissing the guide should persist in local extension storage.");
+      await workspaceManagerClient.send("Page.reload");
+      await waitFor(
+        () => workspaceManagerClient.evaluate(`({ready:document.readyState === "complete",
+          hidden:document.querySelector("#pin-guide").hidden})`),
+        (state) => state.ready && state.hidden,
+        "pin guide remains dismissed after manager reload",
+      );
+    }
     const initialColorPalette = await workspaceManagerClient.evaluate(`(() => {
       const card = [...document.querySelectorAll(".group-card")]
         .find((item) => item.querySelector(".group-title")?.textContent === "Main");

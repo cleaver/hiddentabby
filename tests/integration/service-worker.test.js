@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { registerServiceWorker } from "../../src/service-worker.js";
+import { PIN_ONBOARDING_STORAGE_KEY } from "../../src/pin-onboarding-state.js";
 
 function event() {
   const listeners = [];
@@ -12,8 +13,16 @@ function event() {
 }
 
 function setup() {
+  const storageValues = {};
   const chrome = {
     runtime: { onInstalled: event(), onStartup: event(), onMessage: event() },
+    action: { onUserSettingsChanged: event() },
+    storage: {
+      local: {
+        async get(key) { return { [key]: storageValues[key] }; },
+        async set(values) { Object.assign(storageValues, values); },
+      },
+    },
     windows: { onRemoved: event() },
     tabs: {
       onCreated: event(), onActivated: event(), onUpdated: event(), onRemoved: event(), onAttached: event(), onMoved: event(),
@@ -26,8 +35,31 @@ function setup() {
     "moveTab", "deleteTab", "getState", "createGroup", "renameGroup", "recolorGroup", "reorderGroups", "deleteGroup", "switchGroup",
   ].map((name) => [name, (...args) => { calls.push([name, ...args]); return Promise.resolve({ name, args }); }]));
   registerServiceWorker(chrome, controller);
-  return { chrome, calls };
+  return { chrome, calls, storageValues };
 }
+
+test("service worker clears the dismissed pin tip when toolbar visibility changes", async () => {
+  const { chrome, storageValues } = setup();
+  storageValues[PIN_ONBOARDING_STORAGE_KEY] = { dismissed: true, isOnToolbar: false };
+
+  const [pinnedUpdate] = chrome.action.onUserSettingsChanged.fire({ isOnToolbar: true });
+  await pinnedUpdate;
+  assert.deepEqual(storageValues[PIN_ONBOARDING_STORAGE_KEY], { dismissed: false, isOnToolbar: true });
+
+  storageValues[PIN_ONBOARDING_STORAGE_KEY] = { dismissed: true, isOnToolbar: true };
+  const [unpinnedUpdate] = chrome.action.onUserSettingsChanged.fire({ isOnToolbar: false });
+  await unpinnedUpdate;
+  assert.deepEqual(storageValues[PIN_ONBOARDING_STORAGE_KEY], { dismissed: false, isOnToolbar: false });
+});
+
+test("service worker ignores toolbar settings without a visibility value", async () => {
+  const { chrome, storageValues } = setup();
+  storageValues[PIN_ONBOARDING_STORAGE_KEY] = { dismissed: true, isOnToolbar: false };
+
+  const [ignoredUpdate] = chrome.action.onUserSettingsChanged.fire({});
+  assert.equal(ignoredUpdate, undefined);
+  assert.deepEqual(storageValues[PIN_ONBOARDING_STORAGE_KEY], { dismissed: true, isOnToolbar: false });
+});
 
 test("service worker forwards lifecycle events and the clicked tab ID", async () => {
   const { chrome, calls } = setup();

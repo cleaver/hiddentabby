@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add a non-blocking toolbar pinning guide with a short, dismissible cat-paw animation that hides while pinned and respects reduced-motion settings.
+
 ## 0.2.1 — 2026-10-19
 
 - Remove side-panel support, its popup button, and the `sidePanel` permission.

@@ -1,7 +1,17 @@
+import {
+  PIN_ONBOARDING_STORAGE_KEY,
+  reconcilePinOnboardingPreference,
+  shouldShowPinOnboarding,
+} from "./src/pin-onboarding-state.js";
+
 const groupsElement = document.querySelector("#groups");
 const statusElement = document.querySelector("#status");
 const createForm = document.querySelector("#create-form");
 const nameInput = document.querySelector("#group-name");
+const pinGuideElement = document.querySelector("#pin-guide");
+const pinGuideDismiss = document.querySelector("#pin-guide-dismiss");
+const pinAnimation = document.querySelector("#pin-animation");
+const pinAnimationControl = document.querySelector("#pin-animation-control");
 const collapsedGroupIds = new Set();
 const tabDragDataType = "application/x-hiddentabby-tab-id";
 let draggedTabId = null;
@@ -36,6 +46,9 @@ let activeStateLoad = null;
 let automaticTabEditRetryBlocked = false;
 let queuedStorageRefresh = false;
 let retryDelayPending = false;
+let pinGuidePreference = null;
+let pinGuideVisible = false;
+let pinGuideUpdateGeneration = 0;
 
 async function command(type, values = {}) {
   const response = await chrome.runtime.sendMessage({ type, ...values });
@@ -50,6 +63,75 @@ function setStatus(message, kind = "info") {
   statusElement.textContent = message;
   statusElement.dataset.kind = kind;
 }
+
+function renderPinGuide(preference, isOnToolbar = preference?.isOnToolbar) {
+  pinGuidePreference = preference;
+  const shouldShow = shouldShowPinOnboarding(preference, isOnToolbar);
+  if (shouldShow && !pinGuideVisible) {
+    pinAnimation.classList.remove("is-paused");
+    pinAnimationControl.textContent = "Pause animation";
+    pinAnimationControl.setAttribute("aria-pressed", "false");
+    pinGuideDismiss.checked = false;
+  }
+  pinGuideVisible = shouldShow;
+  pinGuideElement.hidden = !shouldShow;
+}
+
+async function applyPinToolbarSetting(isOnToolbar) {
+  if (typeof isOnToolbar !== "boolean") {
+    pinGuideUpdateGeneration += 1;
+    pinGuideVisible = false;
+    pinGuideElement.hidden = true;
+    return;
+  }
+
+  const generation = ++pinGuideUpdateGeneration;
+  try {
+    const stored = await chrome.storage.local.get(PIN_ONBOARDING_STORAGE_KEY);
+    if (generation !== pinGuideUpdateGeneration) return;
+    const current = stored[PIN_ONBOARDING_STORAGE_KEY];
+    const next = reconcilePinOnboardingPreference(current, isOnToolbar);
+    renderPinGuide(next, isOnToolbar);
+    if (generation === pinGuideUpdateGeneration
+      && (current?.dismissed !== next.dismissed || current?.isOnToolbar !== next.isOnToolbar)) {
+      await chrome.storage.local.set({ [PIN_ONBOARDING_STORAGE_KEY]: next });
+    }
+  } catch {
+    if (generation !== pinGuideUpdateGeneration) return;
+    pinGuideVisible = false;
+    pinGuideElement.hidden = true;
+  }
+}
+
+async function refreshPinGuide() {
+  const generation = ++pinGuideUpdateGeneration;
+  try {
+    const settings = await chrome.action.getUserSettings();
+    if (generation !== pinGuideUpdateGeneration) return;
+    await applyPinToolbarSetting(settings?.isOnToolbar);
+  } catch {
+    if (generation !== pinGuideUpdateGeneration) return;
+    pinGuideVisible = false;
+    pinGuideElement.hidden = true;
+  }
+}
+
+pinGuideDismiss.addEventListener("change", async () => {
+  if (!pinGuideDismiss.checked || pinGuidePreference?.isOnToolbar !== false) return;
+  const dismissed = { dismissed: true, isOnToolbar: false };
+  renderPinGuide(dismissed, false);
+  try {
+    await chrome.storage.local.set({ [PIN_ONBOARDING_STORAGE_KEY]: dismissed });
+  } catch {
+    setStatus("Could not save this preference. The tip may return when you reopen the manager.", "error");
+  }
+});
+
+pinAnimationControl.addEventListener("click", () => {
+  const isPaused = pinAnimation.classList.toggle("is-paused");
+  pinAnimationControl.textContent = isPaused ? "Play animation" : "Pause animation";
+  pinAnimationControl.setAttribute("aria-pressed", String(isPaused));
+});
 
 function makeButton(label, className, action, disabled = false) {
   const button = document.createElement("button");
@@ -643,6 +725,23 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName === "local" && changes["hiddentabby.state"]) {
     void loadState({ preserveStatus: true });
   }
+  if (areaName === "local" && changes[PIN_ONBOARDING_STORAGE_KEY]) {
+    pinGuideUpdateGeneration += 1;
+    const preference = changes[PIN_ONBOARDING_STORAGE_KEY].newValue;
+    if (preference && typeof preference.isOnToolbar === "boolean") {
+      renderPinGuide(preference, preference.isOnToolbar);
+    } else {
+      void refreshPinGuide();
+    }
+  }
+});
+
+chrome.action?.onUserSettingsChanged?.addListener((settings) => {
+  void applyPinToolbarSetting(settings?.isOnToolbar);
+});
+window.addEventListener("focus", () => void refreshPinGuide());
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") void refreshPinGuide();
 });
 
 createForm.addEventListener("submit", async (event) => {
@@ -661,3 +760,4 @@ createForm.addEventListener("submit", async (event) => {
 });
 
 void loadState();
+void refreshPinGuide();

@@ -25,6 +25,7 @@ const extensionFiles = [
   "src/service-worker.js",
   "src/chrome-browser.js",
   "src/group-state.js",
+  "src/pin-onboarding-state.js",
   "src/state-store.js",
   "src/workspace-controller.js",
 ];

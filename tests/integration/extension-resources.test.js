@@ -57,4 +57,21 @@ test("extension pages use local scripts and safe DOM text APIs", async () => {
     const source = await readFile(resolve(root, script), "utf8");
     assert.equal(/\.innerHTML\s*=|insertAdjacentHTML\s*\(/.test(source), false, `${script} must not inject page-derived HTML`);
   }
+
+  const manager = await readFile(resolve(root, "manager.html"), "utf8");
+  assert.match(manager, /id="pin-guide"[^>]*hidden/, "The pin tip should not interrupt manager startup.");
+  assert.match(manager, /id="pin-guide-dismiss"[^>]*type="checkbox"/);
+  assert.match(manager, /id="pin-animation"[^>]*role="img"/);
+  assert.match(manager, /class="pin-demo-paw"/, "The guide should use an orange cat paw to demonstrate the click.");
+
+  const managerScript = await readFile(resolve(root, "manager.js"), "utf8");
+  assert.match(managerScript, /getUserSettings\(\)/, "The guide should use the browser's toolbar visibility setting.");
+  assert.match(managerScript, /onUserSettingsChanged/, "The guide should update immediately when toolbar visibility changes.");
+  const onboardingModule = await readFile(resolve(root, "src/pin-onboarding-state.js"), "utf8");
+  assert.match(managerScript, /pin-onboarding-state\.js/);
+  assert.match(onboardingModule, /dismissed/);
+
+  const styles = await readFile(resolve(root, "manager.css"), "utf8");
+  assert.match(styles, /@keyframes pin-paw-journey/);
+  assert.match(styles, /prefers-reduced-motion: reduce/);
 });
