@@ -4,6 +4,7 @@
 
 - Open the Workspace Manager after first installation, without reopening it on extension updates.
 - Add a non-blocking toolbar pinning guide with a dismissible cat-paw animation that reaches up to the Heroicons puzzle piece before pinning, then fades out before a one-second restart delay; hide it while pinned and respect reduced-motion settings.
+- Reconnect restored tabs to saved records after browser IDs or titles change, remove pinned tabs from pending switch snapshots, and keep uncertain restore outcomes journaled until they can be reconciled.
 
 ## 0.2.1 — 2026-10-19
 

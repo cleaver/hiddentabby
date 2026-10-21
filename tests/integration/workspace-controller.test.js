@@ -162,6 +162,61 @@ test("restart reconciles live tabs and does not repeat first-run adoption", asyn
   assert.equal(calls.filter(([name]) => name === "updateGroups").length, 1);
 });
 
+test("restart with changed tab IDs and titles reuses the saved record on switching", async () => {
+  const windows = [normalWindow()];
+  const first = setup(windows);
+  const initial = await first.controller.getState();
+  const work = await first.controller.createGroup({ name: "Work" });
+
+  windows[0].id = 30;
+  for (const tab of windows[0].tabs) {
+    tab.id += 200;
+    tab.windowId = 30;
+  }
+  windows[0].tabs[0].title = "One (1 unread)";
+  const { browser } = browserHarness(windows);
+  const store = new StateStore(first.storage, { createInitialState: createInitialStateFactory(browser) });
+  const controller = new WorkspaceController({ store, browser });
+
+  const reconciled = await controller.getState();
+  assert.equal(reconciled.tabs.filter((tab) => tab.url === "https://one.example").length, 1,
+    "A changed browser tab ID and title must not create a second record for the saved tab.");
+  await controller.switchGroup(work.groups.at(-1).id);
+  const restored = await controller.switchGroup(initial.activeGroupId);
+  assert.equal(windows.flatMap((window) => window.tabs)
+    .filter((tab) => tab.url === "https://one.example").length, 1);
+  assert.equal(restored.state.tabs.filter((tab) => tab.url === "https://one.example").length, 1);
+});
+
+test("pinning an outgoing tab during switch removes its saved snapshot", async () => {
+  const windows = [normalWindow()];
+  const { controller, browser, store } = setup(windows);
+  const initial = await controller.getState();
+  const work = await controller.createGroup({ name: "Work" });
+  const removeTabs = browser.removeTabs.bind(browser);
+  let pinEvent;
+  browser.removeTabs = async (ids) => {
+    if (ids.includes(101)) {
+      const tab = windows[0].tabs.find((candidate) => candidate.id === 101);
+      tab.pinned = true;
+      pinEvent = controller.onTabUpdated(101, { pinned: true }, structuredClone(tab));
+      return;
+    }
+    return removeTabs(ids);
+  };
+
+  const switched = await controller.switchGroup(work.groups.at(-1).id);
+  await pinEvent;
+  assert.equal(switched.state.tabs.some((tab) => tab.url === "https://one.example"), false,
+    "A pinned outgoing tab must not remain as a closed workspace snapshot.");
+  assert.equal(store.snapshot().tabs.some((tab) => tab.url === "https://one.example"), false);
+
+  await controller.switchGroup(initial.activeGroupId);
+  assert.equal(windows.flatMap((window) => window.tabs)
+    .filter((tab) => tab.url === "https://one.example").length, 1,
+    "Switching back must not restore a copy of the pinned tab.");
+});
+
 test("switching never restores browser New Tab records as saved group content", async () => {
   const window = normalWindow(10);
   window.tabs.push({ id: 103, windowId: 10, index: 2, url: "chrome://newtab/", title: "New Tab" });
@@ -521,6 +576,38 @@ test("restored tab creation reconnects a closed snapshot instead of duplicating 
   assert.equal(state.tabs[0].id, snapshot.id);
   assert.equal(state.tabs[0].browserTabId, restoredTab.id);
   assert.equal(state.tabs[0].status, "open");
+});
+
+test("a newly opened same-URL tab does not consume an existing closed duplicate snapshot", async () => {
+  const windows = [normalWindow()];
+  const { controller, store } = setup(windows);
+  const initial = await controller.getState();
+  const original = initial.tabs[0];
+  await store.update((state) => ({
+    ...state,
+    tabs: [...state.tabs, {
+      ...original,
+      id: "intentionally-closed-duplicate",
+      browserTabId: null,
+      status: "closed",
+      index: 8,
+    }],
+  }));
+
+  const newlyOpened = {
+    id: 103,
+    windowId: 10,
+    index: 1,
+    url: original.url,
+    title: original.title,
+  };
+  windows[0].tabs.push(newlyOpened);
+  const state = await controller.onTabCreated(newlyOpened);
+
+  assert.equal(state.tabs.filter((tab) => tab.url === original.url).length, 3,
+    "A genuine new tab remains separate from the open twin and saved closed duplicate.");
+  assert.equal(state.tabs.find((tab) => tab.id === "intentionally-closed-duplicate").status, "closed");
+  assert.equal(state.tabs.find((tab) => tab.browserTabId === newlyOpened.id).status, "open");
 });
 
 test("tab creation events that race with removal do not leave stale open records", async () => {
@@ -1469,6 +1556,209 @@ test("partial restore failures keep failed snapshots and restore successful tabs
   assert.equal(result.state.tabs.find((tab) => tab.id === successfulSnapshot.id)?.status, "open");
   assert.equal(result.state.tabs.find((tab) => tab.id === successfulSnapshot.id)?.browserTabId, 999);
 });
+
+test("a restore checkpoint failure folds its created event back into the saved record", async () => {
+  const { controller, store, browser, storage } = setup();
+  const initial = await controller.getState();
+  const source = initial.tabs.find((tab) => tab.browserTabId === 101);
+  let destinationId;
+  await store.update((state) => {
+    const withWork = createGroup(state, { name: "Restore retry" });
+    destinationId = withWork.groups.at(-1).id;
+    return {
+      ...withWork,
+      tabs: [...withWork.tabs, {
+        ...source,
+        id: "restore-checkpoint-retry",
+        groupId: destinationId,
+        browserTabId: null,
+        status: "closed",
+        url: "https://checkpoint-retry.example",
+        title: "Checkpoint retry",
+      }],
+    };
+  });
+
+  const persist = storage.set.bind(storage);
+  let failOpenCheckpoint = true;
+  storage.set = async (key, value) => {
+    if (failOpenCheckpoint && value.tabs.some((tab) => tab.id === "restore-checkpoint-retry"
+      && tab.status === "open")) {
+      failOpenCheckpoint = false;
+      throw new Error("injected restore checkpoint failure");
+    }
+    return persist(key, value);
+  };
+
+  const createTab = browser.createTab.bind(browser);
+  let createdEvent;
+  browser.createTab = async (properties) => {
+    const tab = await createTab(properties);
+    if (properties.url === "https://checkpoint-retry.example") {
+      createdEvent = controller.onTabCreated(tab);
+    }
+    return tab;
+  };
+
+  await assert.rejects(controller.switchGroup(destinationId), /injected restore checkpoint failure/);
+  await createdEvent;
+  assert.equal(store.snapshot().tabs.filter((tab) => tab.groupId === destinationId
+    && tab.url === "https://checkpoint-retry.example").length, 2,
+  "The delayed create event should expose the interrupted duplicate-record state before recovery.");
+  const liveBeforeRetry = (await windowsTabs(browser)).filter((tab) => tab.url === "https://checkpoint-retry.example");
+  assert.equal(liveBeforeRetry.length, 1);
+  assert.equal(store.snapshot().operations.length, 1);
+
+  const restartedStore = new StateStore(storage, { createInitialState: createInitialStateFactory(browser) });
+  const restartedController = new WorkspaceController({ store: restartedStore, browser });
+  const recovered = await restartedController.getState();
+  const liveAfterRetry = (await windowsTabs(browser)).filter((tab) => tab.url === "https://checkpoint-retry.example");
+  assert.equal(liveAfterRetry.length, 1, "Retry must reconnect the tab already created by the first attempt.");
+  assert.equal(recovered.operations.length, 0);
+  assert.equal(recovered.tabs.filter((tab) => tab.groupId === destinationId
+    && tab.url === "https://checkpoint-retry.example").length, 1);
+  assert.equal(recovered.tabs.find((tab) => tab.id === "restore-checkpoint-retry").browserTabId,
+    liveAfterRetry[0].id);
+});
+
+test("a create call that rejects after creating its tab is reconciled before completion", async () => {
+  const { controller, store, browser } = setup();
+  const initial = await controller.getState();
+  const source = initial.tabs.find((tab) => tab.browserTabId === 101);
+  let destinationId;
+  await store.update((state) => {
+    const withWork = createGroup(state, { name: "Uncertain create" });
+    destinationId = withWork.groups.at(-1).id;
+    return {
+      ...withWork,
+      tabs: [...withWork.tabs, {
+        ...source,
+        id: "uncertain-create",
+        groupId: destinationId,
+        browserTabId: null,
+        status: "closed",
+        url: "https://uncertain-create.example",
+        title: "Uncertain create",
+      }],
+    };
+  });
+  const createTab = browser.createTab.bind(browser);
+  let rejectAfterCreate = true;
+  browser.createTab = async (properties) => {
+    const tab = await createTab(properties);
+    if (rejectAfterCreate && properties.url === "https://uncertain-create.example") {
+      rejectAfterCreate = false;
+      throw new Error("injected lost create acknowledgement");
+    }
+    return tab;
+  };
+
+  const result = await controller.switchGroup(destinationId);
+  const copies = (await windowsTabs(browser)).filter((tab) => tab.url === "https://uncertain-create.example");
+  assert.deepEqual(result.failures, []);
+  assert.equal(copies.length, 1);
+  assert.equal(result.state.operations.length, 0);
+  assert.equal(result.state.tabs.filter((tab) => tab.groupId === destinationId
+    && tab.url === "https://uncertain-create.example").length, 1);
+  assert.equal(result.state.tabs.find((tab) => tab.id === "uncertain-create").browserTabId, copies[0].id);
+});
+
+test("an uncertain restore with a changed URL stays pending instead of creating another tab", async () => {
+  const windows = [normalWindow()];
+  const { controller, store, browser } = setup(windows);
+  const initial = await controller.getState();
+  const source = initial.tabs.find((tab) => tab.browserTabId === 101);
+  let destinationId;
+  await store.update((state) => {
+    const withWork = createGroup(state, { name: "Redirected restore" });
+    destinationId = withWork.groups.at(-1).id;
+    return {
+      ...withWork,
+      tabs: [...withWork.tabs, {
+        ...source,
+        id: "redirected-restore",
+        groupId: destinationId,
+        browserTabId: null,
+        status: "closed",
+        url: "https://before-redirect.example",
+        title: "Before redirect",
+      }],
+    };
+  });
+
+  const createTab = browser.createTab.bind(browser);
+  let createCalls = 0;
+  browser.createTab = async (properties) => {
+    createCalls += 1;
+    const tab = await createTab(properties);
+    const live = windows[0].tabs.find((candidate) => candidate.id === tab.id);
+    live.url = "https://after-redirect.example";
+    throw new Error("injected lost create acknowledgement after redirect");
+  };
+
+  await assert.rejects(controller.switchGroup(destinationId), /identity is unclear/);
+  assert.equal(store.snapshot().operations.length, 1);
+  assert.equal(createCalls, 1);
+  assert.equal((await windowsTabs(browser)).filter((tab) => tab.url === "https://after-redirect.example").length, 1);
+  await assert.rejects(controller.getState(), /identity is unclear/);
+  assert.equal(createCalls, 1, "Retry must not create another tab while the live result is ambiguous.");
+});
+
+test("failed restore movement keeps the journal until cleanup is confirmed", async () => {
+  const windows = [normalWindow(10), normalWindow(20)];
+  const { controller, store, browser } = setup(windows);
+  const initial = await controller.getState();
+  const source = initial.tabs.find((tab) => tab.browserTabId === 101);
+  let destinationId;
+  await store.update((state) => {
+    const withWork = createGroup(state, { name: "Move retry" });
+    destinationId = withWork.groups.at(-1).id;
+    return {
+      ...withWork,
+      tabs: [...withWork.tabs, {
+        ...source,
+        id: "move-cleanup-retry",
+        groupId: destinationId,
+        browserTabId: null,
+        status: "closed",
+        sessionId: "wrong-window-session",
+      }],
+    };
+  });
+
+  browser.restoreSession = async () => {
+    const tab = { id: 999, windowId: 20, index: 2, url: source.url, title: "Restored" };
+    windows[1].tabs.push(tab);
+    return { tab };
+  };
+  const moveTabToWindow = browser.moveTabToWindow.bind(browser);
+  browser.moveTabToWindow = async () => { throw new Error("injected move failure"); };
+  const removeTabs = browser.removeTabs.bind(browser);
+  browser.removeTabs = async (ids) => {
+    if (ids.includes(999)) return;
+    return removeTabs(ids);
+  };
+
+  await assert.rejects(controller.switchGroup(destinationId), /remains open after cleanup failed/);
+  assert.equal(store.snapshot().operations.length, 1);
+  assert.equal(windows.flatMap((window) => window.tabs).filter((tab) => tab.id === 999).length, 1);
+  assert.equal(windows.flatMap((window) => window.tabs)
+    .filter((tab) => tab.url === source.url).length, 1,
+  "The failed attempt must not create a fallback beside the stranded session tab.");
+
+  browser.moveTabToWindow = moveTabToWindow;
+  browser.removeTabs = removeTabs;
+  const recovered = await controller.getState();
+  const copies = windows.flatMap((window) => window.tabs).filter((tab) => tab.url === source.url);
+  assert.equal(copies.length, 1);
+  assert.equal(copies.find((tab) => tab.id === 999).windowId, 10);
+  assert.equal(recovered.operations.length, 0);
+  assert.equal(recovered.tabs.find((tab) => tab.id === "move-cleanup-retry").browserTabId, 999);
+});
+
+function windowsTabs(browser) {
+  return browser.getNormalWindows().then((windows) => windows.flatMap((window) => window.tabs ?? []));
+}
 
 test("duplicate URL sessions are matched by window and original tab index", async () => {
   const window = {

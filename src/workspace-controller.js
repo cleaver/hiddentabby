@@ -17,6 +17,8 @@ import {
   setWindowPlaceholder,
 } from "./group-state.js";
 
+class RetryableOperationError extends Error {}
+
 export function createInitialStateFactory(browser) {
   return async () => {
     const windows = await browser.getNormalWindows();
@@ -774,23 +776,28 @@ export class WorkspaceController {
   ) {
     const windows = liveWindows ?? await this.#browser.getNormalWindows();
     const liveWindowIds = new Set(windows.map((window) => window.id));
-    const liveTabIds = new Set(windows.flatMap((window) => window.tabs ?? []).map((tab) => tab.id));
+    const liveTabs = windows.flatMap((window) => window.tabs ?? []);
+    const liveTabIds = new Set(liveTabs.map((tab) => tab.id));
+    const pinnedTabIds = new Set(liveTabs.filter((tab) => tab.pinned && !tab.incognito).map((tab) => tab.id));
     const earlyRemovals = this.#preCloseTabRemovals.get(operation.id) ?? new Set();
     const missingRecords = closeRecords.filter((record) => Number.isInteger(record.browserTabId)
       && (earlyRemovals.has(record.browserTabId)
+        || pinnedTabIds.has(record.browserTabId)
         || (includeMissingLive && liveWindowIds.has(record.browserWindowId)
           && !liveTabIds.has(record.browserTabId))));
     const missingRecordIds = new Set(missingRecords.map((record) => record.id));
     const missingBrowserTabIds = new Set(missingRecords.map((record) => record.browserTabId));
     const nextCloseRecords = closeRecords.filter((record) => !missingRecordIds.has(record.id));
     const nextClosingTabIds = new Set([...closingTabIds].filter((tabId) =>
-      !earlyRemovals.has(tabId) && (!includeMissingLive || liveTabIds.has(tabId))));
+      !earlyRemovals.has(tabId) && !pinnedTabIds.has(tabId)
+        && (!includeMissingLive || liveTabIds.has(tabId))));
     const operationPayload = operation.payload;
     const payloadCloseIds = operationPayload.closingTabIds ?? [];
     const payloadChanged = nextCloseRecords.length !== closeRecords.length
       || payloadCloseIds.length !== nextClosingTabIds.size
       || payloadCloseIds.some((tabId) => !nextClosingTabIds.has(tabId))
-      || missingRecordIds.has(operationPayload.closeRecord?.id);
+      || missingRecordIds.has(operationPayload.closeRecord?.id)
+      || missingBrowserTabIds.size > 0 && missingRecords.some((record) => pinnedTabIds.has(record.browserTabId));
 
     if (!payloadChanged) {
       return { state: initialState, closeRecords: nextCloseRecords, closingTabIds: nextClosingTabIds };
@@ -1139,6 +1146,18 @@ export class WorkspaceController {
     } catch (error) {
       throw new Error(`Could not close the outgoing tabs: ${error.message}`, { cause: error });
     }
+    reconciliation = await this.#reconcilePlannedCloses(
+      operation,
+      state,
+      closeRecords,
+      closingTabIds,
+      checkpoint,
+      false,
+      await this.#browser.getNormalWindows(),
+    );
+    state = reconciliation.state;
+    closeRecords = reconciliation.closeRecords;
+    closingTabIds = reconciliation.closingTabIds;
     const recentlyClosedAfter = await this.#browser.getRecentlyClosed().catch(() => []);
     const newSessions = recentlyClosedAfter.filter((session) => {
       const sessionId = session.tab?.sessionId;
@@ -1346,6 +1365,7 @@ export class WorkspaceController {
     if (lateUserWindowRemoval.finalWindowClosed) return { failures: [], restoredCount: 0 };
 
     const restoredTabIds = new Set();
+    let restoreAttempt = operation.payload.restoreAttempt ?? null;
     const destinationRecords = state.tabs
       .filter((tab) => tab.groupId === destinationGroupId && tab.status === "closed"
         && isRememberedTab(state, tab, this.#browser.isPlaceholderUrl)
@@ -1372,18 +1392,126 @@ export class WorkspaceController {
         continue;
       }
 
+      let attempt = restoreAttempt?.recordId === record.id ? restoreAttempt : null;
+      if (!attempt) {
+        const beforeRestore = await this.#browser.getNormalWindows();
+        attempt = {
+          recordId: record.id,
+          browserWindowId: window.browserWindowId,
+          baselineTabIds: beforeRestore.flatMap((item) => item.tabs ?? []).map((tab) => tab.id),
+        };
+        state = await checkpoint((current) => ({
+          ...current,
+          operations: current.operations.map((pending) => pending.id === operation.id
+            ? {
+              ...pending,
+              payload: {
+                ...pending.payload,
+                restoreAttempt: attempt,
+              },
+            }
+            : pending),
+        }));
+        restoreAttempt = attempt;
+      }
+
+      let restoredTab = null;
       try {
-        let restoredTab = await this.#browser.findMatchingTab(record, window.browserWindowId, [...restoredTabIds]);
+        const beforeAttemptTabs = await this.#browser.getNormalWindows();
+        const attemptMatches = findRestoreAttemptTabs(record, attempt, beforeAttemptTabs, restoredTabIds, this.#browser);
+        if (attemptMatches.length > 1) {
+          throw new RetryableOperationError(
+            `More than one live tab could match the interrupted restore for “${record.title || record.url}”.`,
+          );
+        }
+        restoredTab = attemptMatches[0] ?? null;
+        if (!restoredTab) {
+          const unrelatedAttemptTabs = findNewRestoreAttemptTabs(
+            attempt,
+            beforeAttemptTabs,
+            restoredTabIds,
+            this.#browser,
+          );
+          if (unrelatedAttemptTabs.length) {
+            throw new RetryableOperationError(
+              `A new tab appeared during the interrupted restore for “${record.title || record.url}”, but its identity is unclear.`,
+            );
+          }
+        }
+        if (!restoredTab) {
+          const claimedTabIds = state.tabs
+            .filter((tab) => tab.status === "open" && tab.id !== record.id)
+            .map((tab) => tab.browserTabId);
+          restoredTab = await this.#browser.findMatchingTab(record, window.browserWindowId,
+            [...restoredTabIds, ...claimedTabIds]);
+        }
         if (!restoredTab && record.sessionId) {
           const restoredSession = await this.#browser.restoreSession(record.sessionId).catch(() => null);
           restoredTab = restoredSession?.tab ?? null;
-          if (restoredTab && restoredTab.windowId !== window.browserWindowId) {
-            try {
-              restoredTab = await this.#browser.moveTabToWindow(restoredTab.id, window.browserWindowId, record.index);
-            } catch {
-              await this.#browser.removeTabs([restoredTab.id]).catch(() => undefined);
-              restoredTab = null;
+        }
+        if (!restoredTab) {
+          let afterSessionRestore;
+          try {
+            afterSessionRestore = await this.#browser.getNormalWindows();
+          } catch (verificationError) {
+            throw new RetryableOperationError(
+              `Could not verify the session restore for “${record.title || record.url}”: ${verificationError.message}`,
+              { cause: verificationError },
+            );
+          }
+          const afterMatches = findRestoreAttemptTabs(record, attempt, afterSessionRestore, restoredTabIds, this.#browser);
+          if (afterMatches.length > 1) {
+            throw new RetryableOperationError(
+              `More than one live tab could match the interrupted restore for “${record.title || record.url}”.`,
+            );
+          }
+          restoredTab = afterMatches[0] ?? null;
+          if (!restoredTab) {
+            const unrelatedAttemptTabs = findNewRestoreAttemptTabs(
+              attempt,
+              afterSessionRestore,
+              restoredTabIds,
+              this.#browser,
+            );
+            if (unrelatedAttemptTabs.length) {
+              throw new RetryableOperationError(
+                `A new tab appeared during the session restore for “${record.title || record.url}”, but its identity is unclear.`,
+              );
             }
+          }
+        }
+        if (restoredTab && restoredTab.windowId !== window.browserWindowId) {
+          try {
+            restoredTab = await this.#browser.moveTabToWindow(
+              restoredTab.id,
+              window.browserWindowId,
+              record.index,
+            );
+          } catch (moveError) {
+            try {
+              await this.#browser.removeTabs([restoredTab.id]);
+            } catch (cleanupError) {
+              throw new RetryableOperationError(
+                `Could not move or remove the restored tab ${restoredTab.id}: ${cleanupError.message}`,
+                { cause: moveError },
+              );
+            }
+            let remainingWindows;
+            try {
+              remainingWindows = await this.#browser.getNormalWindows();
+            } catch (verificationError) {
+              throw new RetryableOperationError(
+                `Could not verify cleanup of restored tab ${restoredTab.id}: ${verificationError.message}`,
+                { cause: moveError },
+              );
+            }
+            if (remainingWindows.some((item) => (item.tabs ?? []).some((tab) => tab.id === restoredTab.id))) {
+              throw new RetryableOperationError(
+                `The restored tab ${restoredTab.id} remains open after cleanup failed.`,
+                { cause: moveError },
+              );
+            }
+            restoredTab = null;
           }
         }
         if (!restoredTab) {
@@ -1392,41 +1520,141 @@ export class WorkspaceController {
           try {
             restoredTab = await this.#browser.createTab(properties);
           } catch (error) {
-            if (!/^(chrome|brave|devtools):/i.test(record.url)) throw error;
-            restoredTab = await this.#browser.createTab({ windowId: window.browserWindowId, index: record.index, active: false });
+            let afterCreateFailure;
+            try {
+              afterCreateFailure = await this.#browser.getNormalWindows();
+            } catch (verificationError) {
+              throw new RetryableOperationError(
+                `Could not verify whether the browser created “${record.title || record.url}”: ${verificationError.message}`,
+                { cause: error },
+              );
+            }
+            const createdMatches = findRestoreAttemptTabs(
+              record,
+              attempt,
+              afterCreateFailure,
+              restoredTabIds,
+              this.#browser,
+            );
+            if (createdMatches.length > 1) {
+              throw new RetryableOperationError(
+                `More than one live tab could match the uncertain create for “${record.title || record.url}”.`,
+                { cause: error },
+              );
+            }
+            restoredTab = createdMatches[0] ?? null;
+            if (!restoredTab) {
+              const unrelatedAttemptTabs = findNewRestoreAttemptTabs(
+                attempt,
+                afterCreateFailure,
+                restoredTabIds,
+                this.#browser,
+              );
+              if (unrelatedAttemptTabs.length) {
+                throw new RetryableOperationError(
+                  `A tab appeared during the uncertain create for “${record.title || record.url}”, but its identity is unclear.`,
+                  { cause: error },
+                );
+              }
+            }
+            if (!restoredTab && /^(chrome|brave|devtools):/i.test(record.url)) {
+              attempt = { ...attempt, allowNewTabInWindow: true };
+              state = await checkpoint((current) => ({
+                ...current,
+                operations: current.operations.map((pending) => pending.id === operation.id
+                  ? {
+                    ...pending,
+                    payload: {
+                      ...pending.payload,
+                      restoreAttempt: attempt,
+                    },
+                  }
+                  : pending),
+              }));
+              restoreAttempt = attempt;
+              try {
+                restoredTab = await this.#browser.createTab({
+                  windowId: window.browserWindowId,
+                  index: record.index,
+                  active: false,
+                });
+              } catch (fallbackError) {
+                let afterFallbackFailure;
+                try {
+                  afterFallbackFailure = await this.#browser.getNormalWindows();
+                } catch (verificationError) {
+                  throw new RetryableOperationError(
+                    `Could not verify fallback creation for “${record.title || record.url}”: ${verificationError.message}`,
+                    { cause: fallbackError },
+                  );
+                }
+                const fallbackMatches = findRestoreAttemptTabs(
+                  record,
+                  attempt,
+                  afterFallbackFailure,
+                  restoredTabIds,
+                  this.#browser,
+                );
+                if (fallbackMatches.length > 1) {
+                  throw new RetryableOperationError(
+                    `More than one live tab could match the fallback for “${record.title || record.url}”.`,
+                    { cause: fallbackError },
+                  );
+                }
+                restoredTab = fallbackMatches[0] ?? null;
+                if (!restoredTab) throw fallbackError;
+              }
+            } else if (!restoredTab) {
+              throw error;
+            }
           }
         }
-        if (!Number.isInteger(restoredTab?.id)) throw new Error("The browser did not return the restored tab ID.");
-        restoredTabIds.add(restoredTab.id);
-        state = await checkpoint((current) => ({
-          ...current,
-          tabs: current.tabs.map((tab) => tab.id === record.id
-            ? {
-              ...tab,
-              browserTabId: restoredTab.id,
-              browserWindowId: window.browserWindowId,
-              url: restoredTab.url || tab.url,
-              title: restoredTab.title || tab.title,
-              sessionId: null,
-              status: "open",
-            }
-            : tab),
-          operations: current.operations.map((pending) => pending.id === operation.id
-            ? {
-              ...pending,
-              payload: {
-                ...pending.payload,
-                restoredWindowRecordIds: [...new Set([
-                  ...(pending.payload.restoredWindowRecordIds ?? []),
-                  record.windowId,
-                ])],
-              },
-            }
-            : pending),
-        }));
       } catch (error) {
+        if (error instanceof RetryableOperationError) throw error;
         failures.push(`Could not restore “${record.title || record.url}”: ${error.message}`);
+        continue;
       }
+      if (!Number.isInteger(restoredTab?.id)) {
+        throw new RetryableOperationError("The browser did not return the restored tab ID.");
+      }
+      restoredTabIds.add(restoredTab.id);
+      const extraRecord = state.tabs.find((tab) => tab.id !== record.id
+        && tab.status === "open" && tab.browserTabId === restoredTab.id);
+      if (extraRecord && (extraRecord.groupId !== destinationGroupId
+        || extraRecord.windowId !== record.windowId
+        || !sameTabAddress(extraRecord, restoredTab))) {
+        throw new RetryableOperationError(
+          `The restored tab ${restoredTab.id} is already claimed by another workspace record.`,
+        );
+      }
+      state = await checkpoint((current) => ({
+        ...current,
+        tabs: current.tabs.filter((tab) => tab.id !== extraRecord?.id).map((tab) => tab.id === record.id
+          ? {
+            ...tab,
+            browserTabId: restoredTab.id,
+            browserWindowId: window.browserWindowId,
+            url: restoredTab.url || tab.url,
+            title: restoredTab.title || tab.title,
+            sessionId: null,
+            status: "open",
+          }
+          : tab),
+        operations: current.operations.map((pending) => pending.id === operation.id
+          ? {
+            ...pending,
+            payload: {
+              ...pending.payload,
+              restoreAttempt: null,
+              restoredWindowRecordIds: [...new Set([
+                ...(pending.payload.restoredWindowRecordIds ?? []),
+                record.windowId,
+              ])],
+            },
+          }
+          : pending),
+      }));
+      restoreAttempt = null;
     }
 
     const finalWindowRemoval = await this.#consumePreCloseWindowRemovals(
@@ -1691,7 +1919,10 @@ export class WorkspaceController {
           continue;
         }
 
-        const snapshot = findSnapshot(state, tab, logicalWindow.id, matchedSnapshotIds);
+        const snapshot = findSnapshot(state, tab, logicalWindow.id, matchedSnapshotIds, {
+          preferredGroupId: state.activeGroupId,
+          allowTitleMismatchForPreferredGroup: true,
+        });
         if (snapshot) {
           matchedSnapshotIds.add(snapshot.id);
           Object.assign(snapshot, {
@@ -1787,7 +2018,10 @@ function chooseLogicalWindow(state, browserWindow, tabs, used, browser) {
   const isPlaceholder = tabs.some((tab) => isPlaceholderTab(browser, tab));
   const scores = new Map();
   for (const tab of tabs) {
-    const snapshot = findSnapshot(state, tab, null, new Set());
+    const snapshot = findSnapshot(state, tab, null, new Set(), {
+      preferredGroupId: state.activeGroupId,
+      allowTitleMismatchForPreferredGroup: true,
+    });
     if (snapshot) scores.set(snapshot.windowId, (scores.get(snapshot.windowId) ?? 0) + 3);
   }
   if (isPlaceholder) {
@@ -1804,7 +2038,13 @@ function chooseLogicalWindow(state, browserWindow, tabs, used, browser) {
   return candidate ? state.windows.find((window) => window.id === candidate[0]) : null;
 }
 
-function findSnapshot(state, browserTab, logicalWindowId, usedIds) {
+function findSnapshot(
+  state,
+  browserTab,
+  logicalWindowId,
+  usedIds,
+  { preferredGroupId = null, allowTitleMismatchForPreferredGroup = false } = {},
+) {
   const liveIdMatch = state.tabs.find((tab) => tab.browserTabId === browserTab.id && !usedIds.has(tab.id));
   if (liveIdMatch) return liveIdMatch;
 
@@ -1812,16 +2052,46 @@ function findSnapshot(state, browserTab, logicalWindowId, usedIds) {
   const title = browserTab.title ?? "";
   const candidates = state.tabs.filter((tab) => !usedIds.has(tab.id)
     && tab.url === url
-    && (browserTab.pendingUrl || tab.title === title || !title || !tab.title));
+    && (browserTab.pendingUrl || tab.title === title || !title || !tab.title
+      || (allowTitleMismatchForPreferredGroup && tab.groupId === preferredGroupId)));
   return candidates.sort((a, b) => {
-    const scoreA = (a.windowId === logicalWindowId ? 10 : 0)
+    const scoreA = (a.groupId === preferredGroupId ? 1000 : 0)
+      + (a.windowId === logicalWindowId ? 10 : 0)
       + (a.browserWindowId === browserTab.windowId ? 5 : 0)
       - Math.abs(a.index - browserTab.index) * 0.01;
-    const scoreB = (b.windowId === logicalWindowId ? 10 : 0)
+    const scoreB = (b.groupId === preferredGroupId ? 1000 : 0)
+      + (b.windowId === logicalWindowId ? 10 : 0)
       + (b.browserWindowId === browserTab.windowId ? 5 : 0)
       - Math.abs(b.index - browserTab.index) * 0.01;
     return scoreB - scoreA;
   })[0] ?? null;
+}
+
+function findRestoreAttemptTabs(record, attempt, windows, excludedIds, browser) {
+  const baselineIds = new Set(attempt.baselineTabIds ?? []);
+  return windows.flatMap((window) => window.tabs ?? [])
+    .filter((tab) => !baselineIds.has(tab.id)
+      && !excludedIds.has(tab.id)
+      && !tab.incognito && !tab.pinned
+      && !isPlaceholderTab(browser, tab)
+      && (sameTabAddress(record, tab)
+        || (attempt.allowNewTabInWindow && tab.windowId === attempt.browserWindowId)));
+}
+
+function findNewRestoreAttemptTabs(attempt, windows, excludedIds, browser) {
+  const baselineIds = new Set(attempt.baselineTabIds ?? []);
+  return windows.flatMap((window) => window.tabs ?? [])
+    .filter((tab) => !baselineIds.has(tab.id)
+      && !excludedIds.has(tab.id)
+      && !tab.incognito && !tab.pinned
+      && !isPlaceholderTab(browser, tab));
+}
+
+function sameTabAddress(record, tab) {
+  const address = typeof tab.pendingUrl === "string" && tab.pendingUrl
+    ? tab.pendingUrl
+    : typeof tab.url === "string" ? tab.url : "";
+  return Boolean(record.url) && address === record.url;
 }
 
 function adoptLiveTabSnapshot(state, snapshot, browserTab) {
