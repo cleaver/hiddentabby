@@ -8,7 +8,7 @@ playwright-mcp:
       echo "Playwright MCP registered with Codex. Restart Codex to load it."
     fi
 
-refresh:
+refresh: package
     rm -rf dist/HiddenTabby
     unzip -q dist/HiddenTabby.zip -d dist/HiddenTabby
 
