@@ -81,9 +81,10 @@ test("extension pages use local scripts and safe DOM text APIs", async () => {
   assert.match(onboardingModule, /dismissed/);
 
   const styles = await readFile(resolve(root, "manager.css"), "utf8");
-  assert.match(styles, /--pin-demo-cycle-duration:\s*7s/, "The guide should leave a one-second focus pause at each end of its loop.");
+  assert.match(styles, /--pin-demo-cycle-duration:\s*7\.5s/, "The guide should leave a one-second delay after its paw fades.");
   assert.match(manager, /<svg viewBox="0 0 24 24"[^>]*fill="none" stroke="currentColor" stroke-width="1\.5"/);
   assert.match(styles, /@keyframes pin-paw-journey/);
+  assert.match(styles, /@keyframes pin-paw-fade/);
   assert.match(styles, /@keyframes pin-sparkle-burst/);
   assert.match(styles, /prefers-reduced-motion: reduce/);
 });
