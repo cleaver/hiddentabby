@@ -141,6 +141,7 @@ a {
 }
 
 .pin-demo {
+  --pin-demo-cycle-duration: 7s;
   position: relative;
   min-height: 274px;
   overflow: hidden;
@@ -203,13 +204,12 @@ a {
   place-items: center;
   border-radius: 7px;
   color: #e0e3e7;
-  animation: pin-puzzle-click 5s ease-in-out infinite;
+  animation: pin-puzzle-click var(--pin-demo-cycle-duration) ease-in-out infinite;
 }
 
 .pin-demo-puzzle svg {
-  width: 19px;
-  height: 19px;
-  fill: currentColor;
+  width: 21px;
+  height: 21px;
 }
 
 .pin-demo-pinned-icon {
@@ -221,7 +221,7 @@ a {
   background: #282a2c;
   opacity: 0;
   transform: scale(.68) translateY(-5px);
-  animation: pin-toolbar-icon 5s ease-in-out infinite;
+  animation: pin-toolbar-icon var(--pin-demo-cycle-duration) ease-in-out infinite;
 }
 
 .pin-demo-pinned-icon img {
@@ -274,7 +274,7 @@ a {
   transform: scale(.97) translateY(-5px);
   transform-origin: top right;
   visibility: hidden;
-  animation: pin-menu-open 5s ease-in-out infinite;
+  animation: pin-menu-open var(--pin-demo-cycle-duration) ease-in-out infinite;
 }
 
 .pin-demo-menu-heading,
@@ -333,7 +333,7 @@ a {
   height: 28px;
   place-items: center;
   color: #c9cdd2;
-  animation: pin-confirm 5s ease-in-out infinite;
+  animation: pin-confirm var(--pin-demo-cycle-duration) ease-in-out infinite;
 }
 
 .pin-demo-pin svg {
@@ -365,7 +365,7 @@ a {
   pointer-events: none;
   opacity: 0;
   transform: scale(.3) rotate(-12deg);
-  animation: pin-sparkle-burst 5s ease-out infinite;
+  animation: pin-sparkle-burst var(--pin-demo-cycle-duration) ease-out infinite;
 }
 
 .sparkle-main {
@@ -391,7 +391,7 @@ a {
   filter: drop-shadow(0 2px 2px rgb(0 0 0 / 45%));
   pointer-events: none;
   transform-origin: 50% 32%;
-  animation: pin-paw-journey 5s cubic-bezier(.35, 0, .2, 1) infinite;
+  animation: pin-paw-journey var(--pin-demo-cycle-duration) cubic-bezier(.35, 0, .2, 1) infinite;
 }
 
 .pin-demo-paw img {
@@ -418,38 +418,38 @@ a {
 }
 
 @keyframes pin-puzzle-click {
-  0%, 5%, 13%, 100% { background: transparent; transform: scale(1); }
-  7%, 10% { background: #4b4d50; transform: scale(.91); }
+  0%, 14.3%, 17.9%, 23.6%, 85.7%, 100% { background: transparent; transform: scale(1); }
+  19.3%, 21.4% { background: #4b4d50; transform: scale(.91); }
 }
 
 @keyframes pin-menu-open {
-  0%, 11%, 97%, 100% { opacity: 0; transform: scale(.97) translateY(-5px); visibility: hidden; }
-  14%, 94% { opacity: 1; transform: scale(1) translateY(0); visibility: visible; }
+  0%, 14.3%, 22.1%, 83.6%, 85.7%, 100% { opacity: 0; transform: scale(.97) translateY(-5px); visibility: hidden; }
+  24.3%, 81.4% { opacity: 1; transform: scale(1) translateY(0); visibility: visible; }
 }
 
 @keyframes pin-paw-journey {
-  0%, 18% { transform: translate(10px, 0) rotate(-8deg); }
-  39% { transform: translate(-1px, 143px) rotate(0); }
-  44%, 49% { transform: translate(-1px, 143px) rotate(-10deg) scale(.9); }
-  54% { transform: translate(-1px, 143px) rotate(0) scale(1); }
-  68%, 100% { transform: translate(10px, 0) rotate(-8deg); }
+  0%, 14.3%, 27.1% { transform: translate(10px, 0) rotate(-8deg); }
+  42.1% { transform: translate(-1px, 143px) rotate(0); }
+  45.7%, 49.3% { transform: translate(-1px, 143px) rotate(-10deg) scale(.9); }
+  52.9% { transform: translate(-1px, 143px) rotate(0) scale(1); }
+  62.9%, 85.7%, 100% { transform: translate(10px, 0) rotate(-8deg); }
 }
 
 @keyframes pin-sparkle-burst {
-  0%, 41%, 59%, 100% { opacity: 0; transform: scale(.3) rotate(-12deg); }
-  44% { opacity: 1; transform: scale(.8) rotate(0); }
-  49% { opacity: 1; transform: scale(1.05) rotate(7deg); }
-  55% { opacity: 0; transform: scale(1.25) rotate(14deg); }
+  0%, 14.3%, 43.6%, 56.4%, 85.7%, 100% { opacity: 0; transform: scale(.3) rotate(-12deg); }
+  45.7% { opacity: 1; transform: scale(.8) rotate(0); }
+  49.3% { opacity: 1; transform: scale(1.05) rotate(7deg); }
+  53.6% { opacity: 0; transform: scale(1.25) rotate(14deg); }
 }
 
 @keyframes pin-confirm {
-  0%, 48%, 100% { color: #c9cdd2; transform: scale(1); }
-  51%, 60% { color: #8be0bd; transform: scale(1.13); }
+  0%, 14.3%, 48.6%, 85.7% { color: #c9cdd2; transform: scale(1); }
+  50.7%, 57.1% { color: #8be0bd; transform: scale(1.13); }
 }
 
 @keyframes pin-toolbar-icon {
-  0%, 58%, 100% { opacity: 0; transform: scale(.68) translateY(-5px); }
-  64%, 93% { opacity: 1; transform: scale(1) translateY(0); }
+  0%, 14.3%, 55.7% { opacity: 0; transform: scale(.68) translateY(-5px); }
+  60%, 80.7%, 85.7%, 100% { opacity: 1; transform: scale(1) translateY(0); }
 }
 
 .brand-mark {

@@ -361,10 +361,16 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
         const scene = document.querySelector("#pin-animation");
         const animations = new Set([...scene.querySelectorAll("*")]
           .flatMap((element) => element.getAnimations()));
-        for (const animation of animations) {
+        const timing = [...animations].map((animation) => animation.effect.getTiming().duration);
+        animations.forEach((animation) => {
           animation.pause();
-          animation.currentTime = 2200;
-        }
+          animation.currentTime = 1000;
+        });
+        const puzzle = document.querySelector(".pin-demo-puzzle");
+        const beforeFirstClick = getComputedStyle(puzzle).backgroundColor;
+        animations.forEach((animation) => { animation.currentTime = 1450; });
+        const duringFirstClick = getComputedStyle(puzzle).backgroundColor;
+        animations.forEach((animation) => { animation.currentTime = 3200; });
         const hotspot = document.querySelector(".pin-demo-paw-hotspot").getBoundingClientRect();
         const pin = document.querySelector(".pin-demo-pin").getBoundingClientRect();
         const sparkles = document.querySelector(".pin-demo-sparkles");
@@ -377,6 +383,7 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
         const sparkleX = sparkleRect.left + sparkleRect.width / 2;
         const sparkleY = sparkleRect.top + sparkleRect.height / 2;
         return { menuVisibility:getComputedStyle(menu).visibility, menuOpacity:getComputedStyle(menu).opacity,
+          timing, beforeFirstClick, duringFirstClick,
           hotspotOffset:{x:hotspotX - pinX, y:hotspotY - pinY},
           sparkleOffset:{x:sparkleX - pinX, y:sparkleY - pinY},
           hotspotDistance:Math.hypot(hotspotX - pinX, hotspotY - pinY),
@@ -385,6 +392,12 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
       })()`);
       assert.equal(animationTarget.menuVisibility, "visible");
       assert.equal(animationTarget.menuOpacity, "1");
+      assert.ok(animationTarget.timing.length >= 6 && animationTarget.timing.every((duration) => duration === 7000),
+        "All parts of the guide should share a seven-second loop with focus holds.");
+      assert.equal(animationTarget.beforeFirstClick, "rgba(0, 0, 0, 0)",
+        "The puzzle piece should remain idle during the opening focus pause.");
+      assert.equal(animationTarget.duringFirstClick, "rgb(75, 77, 80)",
+        "The puzzle piece should animate its click after the opening pause.");
       assert.ok(animationTarget.animationCount >= 6,
         "The puzzle, menu, pointer, sparkles, pin, and toolbar icon should animate.");
       assert.ok(animationTarget.hotspotDistance <= 2,
@@ -397,6 +410,26 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
       });
       await mkdir(artifactDirectory, { recursive: true });
       await writeFile(join(artifactDirectory, "pin-onboarding.png"), Buffer.from(onboardingScreenshot.data, "base64"));
+      const loopEndState = await workspaceManagerClient.evaluate(`(() => {
+        const scene = document.querySelector("#pin-animation");
+        const animations = new Set([...scene.querySelectorAll("*")]
+          .flatMap((element) => element.getAnimations()));
+        const read = (time) => {
+          animations.forEach((animation) => { animation.currentTime = time; });
+          return {
+            menu: getComputedStyle(document.querySelector(".pin-demo-menu")).visibility,
+            icon: getComputedStyle(document.querySelector(".pin-demo-pinned-icon")).opacity,
+            puzzle: getComputedStyle(document.querySelector(".pin-demo-puzzle")).backgroundColor,
+            paw: getComputedStyle(document.querySelector(".pin-demo-paw")).transform,
+          };
+        };
+        return { early:read(6200), late:read(6900) };
+      })()`);
+      assert.deepEqual(loopEndState.early, loopEndState.late,
+        "The completed pinning scene should stay still for the final second of the loop.");
+      assert.equal(loopEndState.early.menu, "hidden");
+      assert.equal(loopEndState.early.icon, "1", "The toolbar icon should remain visible during the final hold.");
+      assert.equal(loopEndState.early.puzzle, "rgba(0, 0, 0, 0)");
       await workspaceManagerClient.evaluate(`(() => {
         const scene = document.querySelector("#pin-animation");
         const animations = new Set([...scene.querySelectorAll("*")]

@@ -65,6 +65,9 @@ test("extension pages use local scripts and safe DOM text APIs", async () => {
   assert.match(manager, /class="pin-demo-paw"/, "The guide should use an orange cat paw to demonstrate the click.");
   assert.match(manager, /src="assets\/cat-paw-pointer\.png"/);
   assert.match(manager, /class="pin-demo-sparkles"/, "The pointer click should have visual feedback.");
+  assert.match(manager, /class="pin-demo-puzzle"/);
+  assert.match(manager, /Heroicons puzzle-piece \(24px outline\)/, "The toolbar puzzle icon should retain its attribution.");
+  assert.match(manager, /<path stroke-linecap="round" stroke-linejoin="round" d="M14\.25 6\.087/, "The toolbar should use Heroicons' puzzle-piece outline.");
   const pointerImage = await readFile(resolve(root, "assets/cat-paw-pointer.png"));
   assert.equal(pointerImage.readUInt32BE(16), 1024, "The pointer artwork should retain its source resolution.");
   assert.equal(pointerImage.readUInt32BE(20), 1536, "The pointer artwork should retain its source proportions.");
@@ -78,6 +81,8 @@ test("extension pages use local scripts and safe DOM text APIs", async () => {
   assert.match(onboardingModule, /dismissed/);
 
   const styles = await readFile(resolve(root, "manager.css"), "utf8");
+  assert.match(styles, /--pin-demo-cycle-duration:\s*7s/, "The guide should leave a one-second focus pause at each end of its loop.");
+  assert.match(manager, /<svg viewBox="0 0 24 24"[^>]*fill="none" stroke="currentColor" stroke-width="1\.5"/);
   assert.match(styles, /@keyframes pin-paw-journey/);
   assert.match(styles, /@keyframes pin-sparkle-burst/);
   assert.match(styles, /prefers-reduced-motion: reduce/);

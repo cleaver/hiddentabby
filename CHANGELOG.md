@@ -3,7 +3,7 @@
 ## Unreleased
 
 - Open the Workspace Manager after first installation, without reopening it on extension updates.
-- Add a non-blocking toolbar pinning guide with a short, dismissible cat-paw pointer animation and sparkle click effect; hide it while pinned and respect reduced-motion settings.
+- Add a non-blocking toolbar pinning guide with a short, dismissible cat-paw pointer animation, sparkle click effect, and one-second focus pauses; use the Heroicons puzzle-piece outline, hide the guide while pinned, and respect reduced-motion settings.
 
 ## 0.2.1 — 2026-10-19
 
