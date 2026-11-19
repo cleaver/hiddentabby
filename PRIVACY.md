@@ -16,6 +16,10 @@ This data is used only to display and manage workspaces and to restore their tab
 
 You can remove tabs or workspaces in the manager. Deleting a workspace closes its open tabs and removes its HiddenTabby records. The browser manages its own history and recently closed session records separately; deleting a workspace does not erase browser history.
 
+## Optional local agent access
+
+HiddenTabby includes an optional local agent bridge that is off by default. If you choose **Allow access** in the manager, HiddenTabby requests the optional `nativeMessaging` permission and connects to a helper program you installed on your computer. That helper can then receive the URLs and titles of your tabs and HiddenTabby workspace records, and can ask HiddenTabby to close tabs. Data stays on your computer and is available to programs running under your user account while access is allowed. You can revoke access in the manager at any time.
+
 ## Chrome Web Store Limited Use
 
 HiddenTabby uses information accessed through Chrome extension APIs only to provide its tab-workspace features. This use complies with the Chrome Web Store User Data Policy, including the Limited Use requirements. HiddenTabby does not sell or transfer tab data, use it for personalized advertising, or allow people to read it.

@@ -1,3 +1,4 @@
+import "./agent-access.js";
 import {
   PIN_ONBOARDING_STORAGE_KEY,
   reconcilePinOnboardingPreference,

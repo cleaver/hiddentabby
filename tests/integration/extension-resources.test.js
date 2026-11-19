@@ -14,6 +14,9 @@ test("Manifest V3 permissions and declared extension pages are present", async (
   assert.deepEqual(new Set(manifest.permissions), new Set([
     "tabs", "tabGroups", "sessions", "contextMenus", "storage",
   ]));
+  assert.deepEqual(manifest.optional_permissions, ["nativeMessaging"],
+    "Local agent access must stay an optional, user-granted permission.");
+  assert.equal(manifest.key, undefined, "The manifest must not pin an extension key.");
   assert.equal(manifest.side_panel, undefined, "The extension should not declare a side panel.");
 
   const resources = [
@@ -24,6 +27,8 @@ test("Manifest V3 permissions and declared extension pages are present", async (
     manifest.options_ui.page,
     "placeholder.html",
     "placeholder.css",
+    "agent-access.js",
+    "src/agent-bridge.js",
   ];
   for (const resource of resources) {
     await assert.doesNotReject(readFile(resolve(root, resource)), `missing manifest resource: ${resource}`);
@@ -53,7 +58,7 @@ test("extension pages use local scripts and safe DOM text APIs", async () => {
   assert.equal(managerLogo.readUInt32BE(16), 256, "The manager logo should have enough pixels for high-DPI displays.");
   assert.equal(managerLogo.readUInt32BE(20), 256, "The manager logo should remain square.");
 
-  for (const script of ["popup.js", "manager.js"]) {
+  for (const script of ["popup.js", "manager.js", "agent-access.js"]) {
     const source = await readFile(resolve(root, script), "utf8");
     assert.equal(/\.innerHTML\s*=|insertAdjacentHTML\s*\(/.test(source), false, `${script} must not inject page-derived HTML`);
   }

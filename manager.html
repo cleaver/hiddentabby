@@ -105,6 +105,18 @@
         <div id="groups" class="group-grid"></div>
       </section>
 
+      <section class="panel agent-access" aria-labelledby="agent-access-heading">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">Optional</p>
+            <h2 id="agent-access-heading">Local agent access</h2>
+          </div>
+          <button id="agent-access-toggle" class="button secondary" type="button" aria-describedby="agent-access-description" disabled>Checking…</button>
+        </div>
+        <p id="agent-access-description" class="agent-access-description">Lets a helper program you install on this computer list your tabs (titles and URLs) and close tabs by ID, for example a command-line tool or coding agent. Any program running under your user account can use it while allowed. Off by default; nothing connects unless you allow it. Setup: <code>agent-bridge/README.md</code>.</p>
+        <p id="agent-access-status" class="status" role="status" aria-live="polite"></p>
+      </section>
+
       <footer class="page-footer">HiddenTabby closes inactive-group tabs and restores them when you switch back. Restored pages may lose unsaved form data or live page state.</footer>
     </main>
   </body>

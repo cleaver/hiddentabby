@@ -26,6 +26,10 @@ Group and tab metadata, including page titles and URLs, stays in `chrome.storage
 
 HiddenTabby manages tab workspaces only. Brave Containers are separate browser features; HiddenTabby does not detect or manage Container membership.
 
+## Optional local agent access
+
+HiddenTabby can let a local command-line tool or coding agent list tabs and close them by ID. It is off by default and needs a helper installed on your computer. See [agent-bridge/README.md](agent-bridge/README.md).
+
 ## Development and tests
 
 There is no build step or package dependency. Run the browser-independent suites with:

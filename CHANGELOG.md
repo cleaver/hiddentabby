@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add optional local agent access: when allowed in the manager, a locally installed helper can list tabs and close them by ID (optional `nativeMessaging` permission; Linux helper in `agent-bridge/`).
+
 ## 0.2.2 — 2026-10-21
 
 - Open the Workspace Manager after first installation, without reopening it on extension updates.

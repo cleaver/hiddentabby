@@ -1,3 +1,4 @@
+import { connectAgentBridge } from "./agent-bridge.js";
 import { createChromeBrowserApi } from "./chrome-browser.js";
 import {
   PIN_ONBOARDING_STORAGE_KEY,
@@ -99,5 +100,9 @@ if (globalThis.chrome?.runtime?.onInstalled) {
   const store = new StateStore(createChromeStorageAdapter(chrome.storage.local), {
     createInitialState: createInitialStateFactory(browser),
   });
-  registerServiceWorker(chrome, new WorkspaceController({ store, browser }));
+  const controller = new WorkspaceController({ store, browser });
+  registerServiceWorker(chrome, controller);
+  void connectAgentBridge(chrome, controller)?.catch((error) => {
+    console.error("HiddenTabby agent bridge setup failed:", error);
+  });
 }

@@ -1,0 +1,77 @@
+#!/usr/bin/env python3
+"""hiddentabby-tabs: list browser tabs and close them through HiddenTabby's agent bridge.
+
+  hiddentabby-tabs list [--json]      open tabs (id, window, flags, title, url)
+  hiddentabby-tabs dupes [--json]     extra copies of the same URL (keeps one per URL)
+  hiddentabby-tabs close ID [ID...]   close tabs by ID (pinned tabs are never closed)
+"""
+import json
+import os
+import socket
+import sys
+
+RUNTIME = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
+SOCK = os.path.join(RUNTIME, "hiddentabby-bridge.sock")
+
+
+def call(request):
+    client = socket.socket(socket.AF_UNIX)
+    try:
+        client.connect(SOCK)
+    except OSError as error:
+        sys.exit(f"bridge not reachable at {SOCK} ({error}); is the browser running with HiddenTabby local agent access allowed?")
+    client.sendall(json.dumps(request).encode() + b"\n")
+    reply = json.loads(client.makefile("rb").readline())
+    if not reply.get("ok"):
+        sys.exit(f"error: {reply.get('error')}")
+    return reply["value"]
+
+
+def flags(tab):
+    return "".join(c for c, on in (("P", tab["pinned"]), ("A", tab["active"]),
+                                   ("♪", tab["audible"]), ("z", tab["discarded"])) if on) or "-"
+
+
+def dupes(tabs):
+    """Extra copies per exact URL; keep pinned, then active, then most recently used."""
+    by_url = {}
+    for tab in tabs:
+        if tab["url"]:
+            by_url.setdefault(tab["url"], []).append(tab)
+    extras = []
+    for copies in by_url.values():
+        if len(copies) < 2:
+            continue
+        copies.sort(key=lambda t: (t["pinned"], t["active"], t["lastAccessed"] or 0), reverse=True)
+        extras += [t for t in copies[1:] if not t["pinned"] and not t["audible"]]
+    return extras
+
+
+def show(tabs, as_json):
+    if as_json:
+        print(json.dumps(tabs, indent=1))
+        return
+    for t in tabs:
+        print(f"{t['id']:>11} w{t['windowId']:<11} {flags(t):<3} {t['title'][:60]:<60}  {t['url'][:100]}")
+    print(f"{len(tabs)} tabs", file=sys.stderr)
+
+
+def main(argv):
+    if not argv or argv[0] in ("-h", "--help"):
+        print(__doc__)
+        return
+    cmd, rest = argv[0], argv[1:]
+    as_json = "--json" in rest
+    if cmd == "list":
+        show(call({"op": "list"})["tabs"], as_json)
+    elif cmd == "dupes":
+        show(dupes(call({"op": "list"})["tabs"]), as_json)
+    elif cmd == "close":
+        ids = [int(a) if a.isdigit() else a for a in rest if a != "--json"]
+        print(json.dumps(call({"op": "close", "tabIds": ids}), indent=1))
+    else:
+        sys.exit(__doc__)
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

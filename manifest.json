@@ -10,6 +10,7 @@
     "128": "icons/icon128.png"
   },
   "permissions": ["tabs", "tabGroups", "sessions", "contextMenus", "storage"],
+  "optional_permissions": ["nativeMessaging"],
   "background": {
     "service_worker": "src/service-worker.js",
     "type": "module"
