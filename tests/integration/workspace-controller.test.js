@@ -109,6 +109,7 @@ function browserHarness(windows) {
         .find((tab) => !excluded.includes(tab.id) && !tab.pinned && tab.url === snapshot.url && tab.title === snapshot.title) ?? null);
     },
     async activateTab(tabId) { calls.push(["activate", tabId]); },
+    async discardTabs(tabIds) { calls.push(["discard", [...tabIds]]); },
   };
   return { browser, calls };
 }
@@ -186,6 +187,33 @@ test("restart with changed tab IDs and titles reuses the saved record on switchi
   assert.equal(windows.flatMap((window) => window.tabs)
     .filter((tab) => tab.url === "https://one.example").length, 1);
   assert.equal(restored.state.tabs.filter((tab) => tab.url === "https://one.example").length, 1);
+});
+
+test("switching back unloads restored tabs except the one it activates", async () => {
+  const window = normalWindow();
+  window.tabs.push(
+    { id: 103, windowId: 10, index: 2, url: "https://two.example", title: "Two" },
+    { id: 104, windowId: 10, index: 3, url: "https://three.example", title: "Three", active: true },
+  );
+  const { controller, calls } = setup([window]);
+  const initial = await controller.getState();
+  const work = await controller.createGroup({ name: "Work" });
+  await controller.switchGroup(work.groups.at(-1).id);
+  calls.length = 0;
+
+  const restored = await controller.switchGroup(initial.activeGroupId);
+  const restoredIds = restored.state.tabs
+    .filter((tab) => tab.groupId === initial.activeGroupId && tab.status === "open")
+    .map((tab) => tab.browserTabId);
+  const [, activatedId] = calls.find(([name]) => name === "activate");
+  const discarded = calls.filter(([name]) => name === "discard").flatMap(([, ids]) => ids);
+
+  assert.equal(restoredIds.length, 3);
+  assert.ok(restoredIds.includes(activatedId));
+  assert.deepEqual(new Set(discarded), new Set(restoredIds.filter((id) => id !== activatedId)),
+    "Every restored tab except the activated one should be unloaded.");
+  assert.ok(calls.findIndex(([name]) => name === "activate") < calls.findIndex(([name]) => name === "discard"),
+    "The tab to keep must be active before the others are unloaded.");
 });
 
 test("pinning an outgoing tab during switch removes its saved snapshot", async () => {

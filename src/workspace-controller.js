@@ -1737,6 +1737,14 @@ export class WorkspaceController {
           failures.push(`Could not activate the last tab in window ${window.browserWindowId}: ${error.message}`);
         });
       }
+      // Restored tabs start loading immediately. Keep only the active one loaded so
+      // switching to a large group does not load every page at once.
+      const sleepingTabIds = groupTabs
+        .map((tab) => tab.browserTabId)
+        .filter((tabId) => restoredTabIds.has(tabId) && tabId !== lastActive?.browserTabId);
+      if (sleepingTabIds.length) {
+        await this.#browser.discardTabs?.(sleepingTabIds).catch(() => {});
+      }
     }
 
     const focusLiveWindows = await this.#browser.getNormalWindows();
