@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Add an opt-in Workspace Manager setting, "Unload background tabs after switching groups" (off by default). When it is on, restored tabs other than the active one are unloaded once a switch finishes, including after a switch resumed from an interruption, and reload when selected. Pages may start loading during the switch.
+- Add an opt-in setting on the extension Details page, "Unload background tabs after switching groups" (off by default). When it is on, restored tabs other than the active one are unloaded once a switch finishes, including after a switch resumed from an interruption, and reload when selected. Pages may start loading during the switch.
 
 ## 0.2.2 — 2026-10-21
 

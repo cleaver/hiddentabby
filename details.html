@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>HiddenTabby — Details</title>
+    <link rel="stylesheet" href="details.css">
+    <script type="module" src="details.js"></script>
+  </head>
+  <body>
+    <main class="details-page">
+      <header class="details-header">
+        <img src="icons/manager-logo.png" alt="">
+        <div>
+          <p class="eyebrow">HiddenTabby</p>
+          <h1>Details</h1>
+        </div>
+      </header>
+
+      <section class="details-panel" aria-labelledby="memory-heading">
+        <h2 id="memory-heading">Memory</h2>
+        <label class="setting-row" for="unload-restored-tabs">
+          <input id="unload-restored-tabs" type="checkbox" disabled>
+          <span class="setting-copy">
+            <strong>Unload background tabs after switching groups</strong>
+            <span class="setting-hint">When enabled, restored tabs other than the active one are unloaded after a switch finishes and reload when selected. Pages may start loading during the switch.</span>
+          </span>
+        </label>
+        <p id="setting-status" class="setting-status" role="status" aria-live="polite"></p>
+      </section>
+    </main>
+  </body>
+</html>

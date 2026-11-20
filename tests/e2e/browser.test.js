@@ -249,9 +249,67 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
     assert.match(endpoint.version.Browser, /Chrom|Brave/i);
 
     const endpointUrl = "http://127.0.0.1:" + endpoint.port;
+    const extensionsScheme = endpoint.version.Browser.includes("Brave") ? "brave" : "chrome";
     const browserClient = await DevToolsClient.connect(endpoint.version.webSocketDebuggerUrl);
     browserClients.push(browserClient);
     const extensionId = await findExtensionId(profileDirectory, endpointUrl);
+    const extensionDetailsTargetInfo = await browserClient.send("Target.createTarget", {
+      url: extensionsScheme + "://extensions/?id=" + extensionId,
+    });
+    const extensionDetailsTarget = await waitFor(async () => (await browserTargets(endpointUrl))
+      .find((target) => target.id === extensionDetailsTargetInfo.targetId) ?? null,
+    Boolean, "Chrome extension Details page");
+    const extensionDetailsClient = await DevToolsClient.connect(extensionDetailsTarget.webSocketDebuggerUrl);
+    browserClients.push(extensionDetailsClient);
+    await waitFor(
+      () => extensionDetailsClient.evaluate("document.readyState"),
+      (value) => value === "complete",
+      "Chrome extension Details page load",
+    );
+    const extensionOptionsLink = await extensionDetailsClient.evaluate(`(() => {
+      const manager = document.querySelector("extensions-manager");
+      const details = manager?.shadowRoot?.querySelector("extensions-detail-view");
+      const link = details?.shadowRoot?.querySelector("#extensionsOptions");
+      if (!link) return null;
+      return { text: link.innerText, hidden: link.hidden, disabled: link.hasAttribute("disabled") };
+    })()`);
+    assert.ok(extensionOptionsLink, "Chrome should expose HiddenTabby's options entry on its extension Details page.");
+    await extensionDetailsClient.evaluate(`(() => {
+      document.querySelector("extensions-manager").shadowRoot
+        .querySelector("extensions-detail-view").shadowRoot
+        .querySelector("#extensionsOptions").click();
+      return true;
+    })()`);
+    const optionsTarget = await waitFor(async () => (await browserTargets(endpointUrl))
+      .find((target) => target.url === "chrome-extension://" + extensionId + "/details.html") ?? null,
+    Boolean, "embedded HiddenTabby Details options page");
+    const optionsClient = await DevToolsClient.connect(optionsTarget.webSocketDebuggerUrl);
+    browserClients.push(optionsClient);
+    await waitFor(
+      () => optionsClient.evaluate("document.querySelector('#unload-restored-tabs')?.disabled === false"),
+      Boolean,
+      "tab unloading setting in the extension Details page",
+    );
+    assert.equal(await optionsClient.evaluate("document.querySelector('h1')?.textContent"), "Details");
+    assert.equal(await optionsClient.evaluate("document.querySelector('#unload-restored-tabs').checked"), false,
+      "The tab unloading option should default off.");
+    await optionsClient.evaluate("document.querySelector('#unload-restored-tabs').click()");
+    await waitFor(
+      () => optionsClient.evaluate("chrome.storage.local.get('hiddentabby.unloadRestoredTabs').then((value)=>value['hiddentabby.unloadRestoredTabs'])"),
+      (value) => value === true,
+      "tab unloading setting persistence from the extension Details page",
+    );
+    await optionsClient.evaluate("document.querySelector('#unload-restored-tabs').click()");
+    await waitFor(
+      () => optionsClient.evaluate("chrome.storage.local.get('hiddentabby.unloadRestoredTabs').then((value)=>value['hiddentabby.unloadRestoredTabs'])"),
+      (value) => value === false,
+      "tab unloading setting reset to its default",
+    );
+    await browserClient.send("Target.closeTarget", { targetId: extensionDetailsTarget.id });
+    await waitFor(async () => !(await browserTargets(endpointUrl))
+      .some((target) => target.id === extensionDetailsTarget.id), Boolean,
+    "close Chrome extension Details page after the settings check");
+
     const installManagerTarget = await waitFor(async () => (await browserTargets(endpointUrl))
       .find((target) => target.type === "page" && target.url.endsWith("/manager.html")) ?? null,
     Boolean, "Workspace Manager opened after first installation");
@@ -273,6 +331,7 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
     assert.equal(manifest.name, "HiddenTabby");
     assert.equal(manifest.manifest_version, 3);
     assert.equal(manifest.permissions.includes("storage"), true);
+    assert.deepEqual(manifest.options_ui, { page: "details.html", open_in_tab: false });
 
     const initialState = await waitFor(
       () => readState(popup.client),
@@ -312,6 +371,8 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
       "full-page manager heading",
     );
     assert.equal(managerHeading, "HiddenTabby");
+    assert.equal(await workspaceManagerClient.evaluate("Boolean(document.querySelector('#unload-restored-tabs'))"), false,
+      "The setting should appear in the browser extension Details view, not Manage Groups.");
     await workspaceManagerClient.send("Emulation.setDeviceMetricsOverride", {
       width: 1024, height: 900, deviceScaleFactor: 1, mobile: false,
     });

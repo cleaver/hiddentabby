@@ -12,6 +12,9 @@ const extensionFiles = [
   "popup.html",
   "popup.css",
   "popup.js",
+  "details.html",
+  "details.css",
+  "details.js",
   "manager.html",
   "manager.css",
   "manager.js",
@@ -27,6 +30,7 @@ const extensionFiles = [
   "src/chrome-browser.js",
   "src/group-state.js",
   "src/pin-onboarding-state.js",
+  "src/settings.js",
   "src/state-store.js",
   "src/workspace-controller.js",
 ];

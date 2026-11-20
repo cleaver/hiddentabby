@@ -3,7 +3,6 @@ import {
   reconcilePinOnboardingPreference,
   shouldShowPinOnboarding,
 } from "./src/pin-onboarding-state.js";
-import { UNLOAD_RESTORED_TABS_STORAGE_KEY } from "./src/settings.js";
 
 const groupsElement = document.querySelector("#groups");
 const statusElement = document.querySelector("#status");
@@ -760,26 +759,5 @@ createForm.addEventListener("submit", async (event) => {
   nameInput.value = "";
 });
 
-const unloadRestoredTabsInput = document.querySelector("#unload-restored-tabs");
-
-async function loadUnloadRestoredTabsSetting() {
-  try {
-    const stored = await chrome.storage.local.get(UNLOAD_RESTORED_TABS_STORAGE_KEY);
-    unloadRestoredTabsInput.checked = stored[UNLOAD_RESTORED_TABS_STORAGE_KEY] === true;
-  } catch {
-    unloadRestoredTabsInput.checked = false;
-  }
-}
-
-unloadRestoredTabsInput.addEventListener("change", async () => {
-  try {
-    await chrome.storage.local.set({ [UNLOAD_RESTORED_TABS_STORAGE_KEY]: unloadRestoredTabsInput.checked });
-  } catch {
-    unloadRestoredTabsInput.checked = !unloadRestoredTabsInput.checked;
-    setStatus("Could not save this setting.", "error");
-  }
-});
-
 void loadState();
 void refreshPinGuide();
-void loadUnloadRestoredTabsSetting();

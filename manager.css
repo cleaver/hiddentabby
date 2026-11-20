@@ -1015,27 +1015,6 @@ a:focus-visible {
   min-width: 118px;
 }
 
-.setting-row {
-  display: flex;
-  gap: 12px;
-  align-items: flex-start;
-  cursor: pointer;
-}
-
-.setting-row input {
-  margin-top: 3px;
-  width: 16px;
-  height: 16px;
-  accent-color: #6cc5a5;
-}
-
-.setting-hint {
-  display: block;
-  margin-top: 2px;
-  color: #9fb0c3;
-  font-size: 13px;
-}
-
 .page-footer {
   margin: 15px 3px 0;
   color: #95a6ba;
