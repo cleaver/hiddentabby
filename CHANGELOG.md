@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Switching groups no longer loads every restored tab at once: restored tabs other than the one being activated are unloaded and load when selected.
+- Add an opt-in Workspace Manager setting, "Unload background tabs after switching groups" (off by default). When it is on, restored tabs other than the active one are unloaded once a switch finishes, including after a switch resumed from an interruption, and reload when selected. Pages may start loading during the switch.
 
 ## 0.2.2 — 2026-10-21
 

@@ -126,11 +126,22 @@ function normalWindow(id = 10) {
   };
 }
 
-function setup(windows = [normalWindow()]) {
+function setup(windows = [normalWindow()], options = {}) {
   const storage = new MemoryStorage();
   const { browser, calls } = browserHarness(windows);
   const store = new StateStore(storage, { createInitialState: createInitialStateFactory(browser) });
-  return { storage, browser, calls, store, controller: new WorkspaceController({ store, browser }) };
+  return { storage, browser, calls, store, controller: new WorkspaceController({ store, browser, ...options }) };
+}
+
+const unloadRestoredTabs = { shouldUnloadRestoredTabs: async () => true };
+
+function windowWithThreeTabs() {
+  const window = normalWindow();
+  window.tabs.push(
+    { id: 103, windowId: 10, index: 2, url: "https://two.example", title: "Two" },
+    { id: 104, windowId: 10, index: 3, url: "https://three.example", title: "Three", active: true },
+  );
+  return window;
 }
 
 test("first startup adopts only normal unpinned tabs into Main", async () => {
@@ -189,13 +200,8 @@ test("restart with changed tab IDs and titles reuses the saved record on switchi
   assert.equal(restored.state.tabs.filter((tab) => tab.url === "https://one.example").length, 1);
 });
 
-test("switching back unloads restored tabs except the one it activates", async () => {
-  const window = normalWindow();
-  window.tabs.push(
-    { id: 103, windowId: 10, index: 2, url: "https://two.example", title: "Two" },
-    { id: 104, windowId: 10, index: 3, url: "https://three.example", title: "Three", active: true },
-  );
-  const { controller, calls } = setup([window]);
+test("switching back unloads restored tabs except the one it activates when the user opted in", async () => {
+  const { controller, calls } = setup([windowWithThreeTabs()], unloadRestoredTabs);
   const initial = await controller.getState();
   const work = await controller.createGroup({ name: "Work" });
   await controller.switchGroup(work.groups.at(-1).id);
@@ -214,6 +220,67 @@ test("switching back unloads restored tabs except the one it activates", async (
     "Every restored tab except the activated one should be unloaded.");
   assert.ok(calls.findIndex(([name]) => name === "activate") < calls.findIndex(([name]) => name === "discard"),
     "The tab to keep must be active before the others are unloaded.");
+});
+
+test("switching back leaves restored tabs loaded unless the user opted in", async () => {
+  const { controller, calls } = setup([windowWithThreeTabs()]);
+  const initial = await controller.getState();
+  const work = await controller.createGroup({ name: "Work" });
+  await controller.switchGroup(work.groups.at(-1).id);
+  calls.length = 0;
+
+  await controller.switchGroup(initial.activeGroupId);
+
+  assert.equal(calls.some(([name]) => name === "discard"), false,
+    "Unloading restored tabs is opt-in; the default keeps existing behavior.");
+});
+
+test("a resumed switch also unloads tabs restored before the interruption", async () => {
+  const windows = [windowWithThreeTabs()];
+  const first = setup(windows, unloadRestoredTabs);
+  const initial = await first.controller.getState();
+  const work = await first.controller.createGroup({ name: "Work" });
+  await first.controller.switchGroup(work.groups.at(-1).id);
+
+  // The worker stops while checkpointing the second restored tab, before the switch finishes.
+  const createTab = first.browser.createTab.bind(first.browser);
+  let created = 0;
+  let failNextCheckpoint = false;
+  first.browser.createTab = async (properties) => {
+    const tab = await createTab(properties);
+    created += 1;
+    if (created === 2) failNextCheckpoint = true;
+    return tab;
+  };
+  const set = first.storage.set.bind(first.storage);
+  first.storage.set = async (key, value) => {
+    if (failNextCheckpoint) {
+      failNextCheckpoint = false;
+      throw new Error("injected restore checkpoint failure");
+    }
+    return set(key, value);
+  };
+  await assert.rejects(first.controller.switchGroup(initial.activeGroupId), /injected restore checkpoint failure/);
+  const beforeResume = (await first.storage.get("hiddentabby.state"))["hiddentabby.state"];
+  assert.equal(beforeResume.operations.length, 1, "The interrupted switch must stay pending.");
+  const restoredBeforeInterruption = beforeResume.operations[0].payload.restoredTabIds ?? [];
+  assert.equal(restoredBeforeInterruption.length, 1, "The tab restored before the interruption is persisted.");
+
+  first.browser.createTab = createTab;
+  first.storage.set = set;
+  first.calls.length = 0;
+  const store = new StateStore(first.storage, { createInitialState: createInitialStateFactory(first.browser) });
+  const restarted = new WorkspaceController({ store, browser: first.browser, ...unloadRestoredTabs });
+  const resumed = await restarted.getState();
+
+  assert.equal(resumed.operations.length, 0);
+  const [, activatedId] = first.calls.find(([name]) => name === "activate");
+  const discarded = first.calls.filter(([name]) => name === "discard").flatMap(([, ids]) => ids);
+  const expected = restoredBeforeInterruption.filter((id) => id !== activatedId);
+  assert.ok(expected.length > 0 || restoredBeforeInterruption.includes(activatedId));
+  for (const id of expected) {
+    assert.ok(discarded.includes(id), `Tab ${id} restored before the interruption must be unloaded after resuming.`);
+  }
 });
 
 test("pinning an outgoing tab during switch removes its saved snapshot", async () => {

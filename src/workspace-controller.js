@@ -31,6 +31,7 @@ export function createInitialStateFactory(browser) {
 
 export class WorkspaceController {
   #store;
+  #shouldUnloadRestoredTabs;
   #browser;
   #ready = null;
   #initialized = false;
@@ -42,10 +43,11 @@ export class WorkspaceController {
   #closeOperationsPreparing = new Set();
   #closeRequestsIssued = new Set();
 
-  constructor({ store, browser }) {
+  constructor({ store, browser, shouldUnloadRestoredTabs = async () => false }) {
     if (!store || !browser) throw new Error("WorkspaceController requires state and browser adapters.");
     this.#store = store;
     this.#browser = browser;
+    this.#shouldUnloadRestoredTabs = shouldUnloadRestoredTabs;
   }
 
   initialize() {
@@ -1364,7 +1366,8 @@ export class WorkspaceController {
     closingTabIds = lateUserWindowRemoval.closingTabIds;
     if (lateUserWindowRemoval.finalWindowClosed) return { failures: [], restoredCount: 0 };
 
-    const restoredTabIds = new Set();
+    // Persisted with each restore checkpoint so a resumed switch still knows every tab it restored.
+    const restoredTabIds = new Set(operation.payload.restoredTabIds ?? []);
     let restoreAttempt = operation.payload.restoreAttempt ?? null;
     const destinationRecords = state.tabs
       .filter((tab) => tab.groupId === destinationGroupId && tab.status === "closed"
@@ -1646,6 +1649,7 @@ export class WorkspaceController {
             payload: {
               ...pending.payload,
               restoreAttempt: null,
+              restoredTabIds: [...new Set([...(pending.payload.restoredTabIds ?? []), restoredTab.id])],
               restoredWindowRecordIds: [...new Set([
                 ...(pending.payload.restoredWindowRecordIds ?? []),
                 record.windowId,
@@ -1737,12 +1741,12 @@ export class WorkspaceController {
           failures.push(`Could not activate the last tab in window ${window.browserWindowId}: ${error.message}`);
         });
       }
-      // Restored tabs start loading immediately. Keep only the active one loaded so
-      // switching to a large group does not load every page at once.
+      // Restored tabs start loading immediately. When the user opted in, unload all but the
+      // active one after the switch so a large group does not stay loaded at once.
       const sleepingTabIds = groupTabs
         .map((tab) => tab.browserTabId)
         .filter((tabId) => restoredTabIds.has(tabId) && tabId !== lastActive?.browserTabId);
-      if (sleepingTabIds.length) {
+      if (sleepingTabIds.length && await this.#shouldUnloadRestoredTabs().catch(() => false)) {
         await this.#browser.discardTabs?.(sleepingTabIds).catch(() => {});
       }
     }
