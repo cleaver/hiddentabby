@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Unload restored background tabs after group switches by default, including on existing installations with no saved preference and after a switch resumes from an interruption. Users can opt out on the extension Details page by checking "Keep restored background tabs loaded." Tabs reload when selected; pages may start loading during the switch.
+- Improve group-switch responsiveness and reduce memory use by unloading restored background tabs by default, including on existing installations with no saved preference and after a switch resumes from an interruption. Users can opt out on the extension Details page by checking "Keep restored background tabs loaded." Tabs reload when selected; pages may start loading during the switch.
 
 ## 0.2.2 — 2026-10-21
 
