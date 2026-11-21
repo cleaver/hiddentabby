@@ -330,6 +330,37 @@ test("switch records the browser's active restored tab before unloading backgrou
     .map((tab) => tab.browserTabId)));
 });
 
+test("switch records the tab selected when the destination window is focused", async () => {
+  const windows = [windowWithThreeTabs()];
+  const { controller, browser } = setup(windows, unloadRestoredTabs);
+  const initial = await controller.getState();
+  const created = await controller.createGroup({ name: "Empty" });
+  await controller.switchGroup(created.groups.at(-1).id);
+
+  const createTab = browser.createTab.bind(browser);
+  browser.createTab = async (properties) => {
+    const createdTab = await createTab(properties);
+    if (properties.url === "https://two.example") {
+      const window = windows.find((candidate) => candidate.id === properties.windowId);
+      window.tabs = window.tabs.map((tab) => ({ ...tab, active: tab.id === createdTab.id }));
+    }
+    return createdTab;
+  };
+  browser.activateTab = async () => {};
+  browser.focusWindow = async (windowId) => {
+    const window = windows.find((candidate) => candidate.id === windowId);
+    window.tabs = window.tabs.map((tab) => ({ ...tab, active: tab.url === "https://three.example" }));
+  };
+
+  const restored = await controller.switchGroup(initial.activeGroupId);
+  const selectedRecord = restored.state.tabs.find((tab) => tab.url === "https://three.example");
+  const otherActiveRecords = restored.state.tabs.filter((tab) => tab.groupId === initial.activeGroupId
+    && tab.windowId === selectedRecord.windowId && tab.status === "open" && tab.lastActive);
+
+  assert.equal(selectedRecord.lastActive, true);
+  assert.deepEqual(otherActiveRecords.map((tab) => tab.id), [selectedRecord.id]);
+});
+
 test("switch stores replacement tab IDs returned while unloading backgrounds", async () => {
   const windows = [windowWithThreeTabs()];
   const { controller, browser, calls } = setup(windows, unloadRestoredTabs);
@@ -2502,6 +2533,20 @@ test("activating a tab records it as the last active tab for its group and windo
   const groupTabs = state.tabs.filter((tab) => tab.groupId === initial.activeGroupId && tab.windowId === state.windows[0].id);
 
   assert.deepEqual(groupTabs.filter((tab) => tab.lastActive).map((tab) => tab.browserTabId), [103]);
+});
+
+test("a stale activation event does not replace the browser's current selection", async () => {
+  const window = windowWithThreeTabs();
+  const staleTab = window.tabs.find((tab) => tab.id === 103);
+  staleTab.active = false;
+  const { controller } = setup([window]);
+  const initial = await controller.getState();
+
+  const state = await controller.onTabActivated({ tabId: staleTab.id, windowId: window.id });
+  const groupTabs = state.tabs.filter((tab) => tab.groupId === initial.activeGroupId
+    && tab.windowId === state.windows[0].id);
+
+  assert.deepEqual(groupTabs.filter((tab) => tab.lastActive).map((tab) => tab.browserTabId), [104]);
 });
 
 test("moving the last active tab leaves an ungrouped placeholder in the window", async () => {

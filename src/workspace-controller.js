@@ -412,10 +412,13 @@ export class WorkspaceController {
   async onTabActivated(activeInfo) {
     await this.initialize();
     const tab = await this.#browser.getTab(activeInfo.tabId);
-    if (!tab || tab.incognito || tab.pinned || isPlaceholderTab(this.#browser, tab)) {
+    if (!tab || tab.active === false || tab.incognito || tab.pinned || isPlaceholderTab(this.#browser, tab)) {
       return this.#store.snapshot();
     }
     let state = this.#store.snapshot();
+    if (state.operations.some((operation) => operation.type === "switch-group" || operation.type === "delete-group")) {
+      return state;
+    }
     if (!state.tabs.some((item) => item.browserTabId === tab.id)) state = await this.onTabCreated(tab);
     const record = state.tabs.find((item) => item.browserTabId === tab.id);
     if (!record) return state;
@@ -1820,6 +1823,26 @@ export class WorkspaceController {
       await this.#browser.focusWindow(focusedWindow.browserWindowId).catch((error) => {
         failures.push(`Could not focus destination window ${focusedWindow.browserWindowId}: ${error.message}`);
       });
+    }
+    const liveWindowsAfterFocus = await this.#browser.getNormalWindows();
+    const activeTabByLogicalWindow = new Map();
+    for (const logicalWindow of state.windows.filter((window) => window.isOpen)) {
+      const liveWindow = liveWindowsAfterFocus.find((window) => window.id === logicalWindow.browserWindowId);
+      const groupTabIds = new Set(state.tabs
+        .filter((tab) => tab.groupId === destinationGroupId && tab.windowId === logicalWindow.id
+          && tab.status === "open")
+        .map((tab) => tab.browserTabId));
+      const activeTab = liveWindow?.tabs?.find((tab) => tab.active && groupTabIds.has(tab.id));
+      if (activeTab) activeTabByLogicalWindow.set(logicalWindow.id, activeTab.id);
+    }
+    if (activeTabByLogicalWindow.size) {
+      state = await checkpoint((current) => ({
+        ...current,
+        tabs: current.tabs.map((tab) => activeTabByLogicalWindow.has(tab.windowId)
+          && tab.groupId === destinationGroupId && tab.status === "open"
+          ? { ...tab, lastActive: tab.browserTabId === activeTabByLogicalWindow.get(tab.windowId) }
+          : tab),
+      }));
     }
 
     return { failures, restoredCount: restoredTabIds.size };
