@@ -137,11 +137,16 @@ export function createChromeBrowserApi(chromeApi = globalThis.chrome) {
     },
 
     async discardTabs(tabIds) {
-      if (!chromeApi.tabs.discard) return;
+      if (!chromeApi.tabs.discard) return [];
+      const discardedTabs = [];
       for (const tabId of new Set(tabIds.filter(Number.isInteger))) {
-        // Unloads the page but keeps the tab, its title and its ID; it reloads when selected.
-        await chromeApi.tabs.discard(tabId).catch(() => {});
+        // Chromium may replace a tab ID while discarding, so return the browser's updated tab.
+        const discardedTab = await chromeApi.tabs.discard(tabId).catch(() => null);
+        if (Number.isInteger(discardedTab?.id)) {
+          discardedTabs.push({ previousId: tabId, tab: discardedTab });
+        }
       }
+      return discardedTabs;
     },
 
     async findMatchingTab(snapshot, windowId, excludedTabIds = []) {

@@ -212,7 +212,8 @@ export class WorkspaceController {
     if (tab.incognito || isPlaceholderTab(this.#browser, tab)) return this.#store.snapshot();
 
     const liveTab = await this.#browser.getTab(tab.id).catch(() => null);
-    if (!liveTab || liveTab.incognito || liveTab.pinned || isPlaceholderTab(this.#browser, liveTab)) {
+    if (!liveTab || liveTab.incognito || liveTab.pinned || liveTab.discarded
+      || isPlaceholderTab(this.#browser, liveTab)) {
       return this.#store.snapshot();
     }
     tab = liveTab;
@@ -274,7 +275,12 @@ export class WorkspaceController {
       if (existing) await this.#browser.groupManagedTabs(updated, existing.groupId, tab.windowId);
       return updated;
     }
-    if (!existing) return this.onTabCreated(tab);
+    if (!existing) {
+      // Chromium can emit the discard update with a replacement ID before discard() resolves.
+      // The switch checkpoint will associate that ID with its existing snapshot.
+      if (changeInfo.discarded === true || tab.discarded) return state;
+      return this.onTabCreated(tab);
+    }
 
     if (existing.browserWindowId !== tab.windowId) {
       const destinationWindow = state.windows.find((window) => window.browserWindowId === tab.windowId);
@@ -295,8 +301,8 @@ export class WorkspaceController {
           ...item,
           url: typeof tab.pendingUrl === "string" && tab.pendingUrl
             ? tab.pendingUrl
-            : typeof tab.url === "string" ? tab.url : item.url,
-          title: typeof tab.title === "string" ? tab.title : item.title,
+            : typeof tab.url === "string" && tab.url ? tab.url : item.url,
+          title: typeof tab.title === "string" && tab.title ? tab.title : item.title,
           faviconUrl: typeof tab.favIconUrl === "string" ? tab.favIconUrl : item.faviconUrl,
           index: Number.isInteger(tab.index) ? tab.index : item.index,
         }
@@ -1741,13 +1747,32 @@ export class WorkspaceController {
           failures.push(`Could not activate the last tab in window ${window.browserWindowId}: ${error.message}`);
         });
       }
-      // Restored tabs start loading immediately. When the user opted in, unload all but the
-      // active one after the switch so a large group does not stay loaded at once.
+      // Restored tabs start loading immediately. When enabled, unload all but the active one
+      // after the switch so a large group does not stay loaded at once.
       const sleepingTabIds = groupTabs
         .map((tab) => tab.browserTabId)
         .filter((tabId) => restoredTabIds.has(tabId) && tabId !== lastActive?.browserTabId);
       if (sleepingTabIds.length && await this.#shouldUnloadRestoredTabs().catch(() => false)) {
-        await this.#browser.discardTabs?.(sleepingTabIds).catch(() => {});
+        const discardedTabs = await this.#browser.discardTabs?.(sleepingTabIds).catch(() => []) ?? [];
+        const discardedByPreviousId = new Map(discardedTabs
+          .filter((result) => Number.isInteger(result?.previousId) && Number.isInteger(result?.tab?.id))
+          .map((result) => [result.previousId, result.tab]));
+        if (discardedByPreviousId.size) {
+          state = await checkpoint((current) => ({
+            ...current,
+            tabs: current.tabs.map((tab) => {
+              const discarded = tab.status === "open" ? discardedByPreviousId.get(tab.browserTabId) : null;
+              return discarded ? {
+                ...tab,
+                browserTabId: discarded.id,
+                browserWindowId: Number.isInteger(discarded.windowId) ? discarded.windowId : tab.browserWindowId,
+                url: discarded.url || tab.url,
+                title: discarded.title || tab.title,
+                index: Number.isInteger(discarded.index) ? discarded.index : tab.index,
+              } : tab;
+            }),
+          }));
+        }
       }
     }
 

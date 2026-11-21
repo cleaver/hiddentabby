@@ -59,7 +59,7 @@ function fakeChrome() {
       discard: async (id) => {
         calls.push(["discard", id]);
         if (id === 99) throw new Error("Cannot discard the active tab.");
-        return { id, discarded: true };
+        return { id: id === 1 ? 101 : id, discarded: true };
       },
       ungroup: async (ids) => {
         calls.push(["ungroup", ids]);
@@ -262,6 +262,9 @@ test("placeholder pages carry a stable logical window key", async () => {
 test("discardTabs unloads each tab once and ignores tabs the browser refuses to discard", async () => {
   const { chrome, calls } = fakeChrome();
   const browser = createChromeBrowserApi(chrome);
-  await browser.discardTabs([1, 99, 1, "x", null]);
+  const discardedTabs = await browser.discardTabs([1, 99, 1, "x", null]);
   assert.deepEqual(calls.filter(([name]) => name === "discard"), [["discard", 1], ["discard", 99]]);
+  assert.deepEqual(discardedTabs.map(({ previousId, tab }) => ({ previousId, id: tab.id })), [
+    { previousId: 1, id: 101 },
+  ], "The adapter should return the browser's updated tab IDs and omit failed discards.");
 });

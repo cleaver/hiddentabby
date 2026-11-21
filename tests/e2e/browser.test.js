@@ -292,18 +292,26 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
     );
     assert.equal(await optionsClient.evaluate("document.querySelector('h1')?.textContent"), "Details");
     assert.equal(await optionsClient.evaluate("document.querySelector('#unload-restored-tabs').checked"), false,
-      "The tab unloading option should default off.");
-    await optionsClient.evaluate("document.querySelector('#unload-restored-tabs').click()");
-    await waitFor(
-      () => optionsClient.evaluate("chrome.storage.local.get('hiddentabby.unloadRestoredTabs').then((value)=>value['hiddentabby.unloadRestoredTabs'])"),
-      (value) => value === true,
-      "tab unloading setting persistence from the extension Details page",
-    );
+      "The keep-loaded opt-out should be unchecked when unloading is enabled by default.");
+    assert.equal(await optionsClient.evaluate("chrome.storage.local.get('hiddentabby.unloadRestoredTabs').then((value)=>Object.hasOwn(value,'hiddentabby.unloadRestoredTabs'))"), false,
+      "An installation with no saved preference should use the enabled default without a migration write.");
     await optionsClient.evaluate("document.querySelector('#unload-restored-tabs').click()");
     await waitFor(
       () => optionsClient.evaluate("chrome.storage.local.get('hiddentabby.unloadRestoredTabs').then((value)=>value['hiddentabby.unloadRestoredTabs'])"),
       (value) => value === false,
-      "tab unloading setting reset to its default",
+      "keep-loaded opt-out persistence from the extension Details page",
+    );
+    await optionsClient.evaluate("document.querySelector('#unload-restored-tabs').click()");
+    await waitFor(
+      () => optionsClient.evaluate("chrome.storage.local.get('hiddentabby.unloadRestoredTabs').then((value)=>value['hiddentabby.unloadRestoredTabs'])"),
+      (value) => value === true,
+      "unloading enabled after opting back in",
+    );
+    await optionsClient.evaluate("chrome.storage.local.remove('hiddentabby.unloadRestoredTabs')");
+    await waitFor(
+      () => optionsClient.evaluate("chrome.storage.local.get('hiddentabby.unloadRestoredTabs').then((value)=>Object.hasOwn(value,'hiddentabby.unloadRestoredTabs'))"),
+      (value) => value === false,
+      "restore the no-preference default for group-switch coverage",
     );
     await browserClient.send("Target.closeTarget", { targetId: extensionDetailsTarget.id });
     await waitFor(async () => !(await browserTargets(endpointUrl))
@@ -839,6 +847,7 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
       && state.windows.filter((window) => window.isOpen).length === 2
       && state.windows.filter((window) => window.isOpen).every((window) => window.pinnedTabIds.length > 0
         && window.placeholderTabId === null)
+      && state.operations.length === 0
       && originalMainRecordIds.every((recordId) => state.tabs.find((tab) => tab.id === recordId)?.status === "closed")
       && !tabs.some((tab) => tab.id === firstWindowTabs.tabId || tab.id === secondWindow.tabId),
     "global switch keeps pinned windows open without blank placeholders");
@@ -868,15 +877,31 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
       && tab.url === fixtureUrl));
 
     await clickGroup(popup.client, "Main");
-    const restoredMainState = await waitFor(
-      () => readState(popup.client),
-      (state) => state.activeGroupId === defaultGroup.id
-        && originalMainRecordIds.every((recordId) => state.tabs.find((tab) => tab.id === recordId)?.status === "open")
-        && state.windows.filter((window) => window.isOpen).every((window) => window.placeholderTabId === null)
-        && state.tabs.find((tab) => tab.id === secondTabRecord.id)?.browserWindowId === secondWindow.windowId,
-      "global restore of Main tabs",
+    let stableMainRestoreSamples = 0;
+    const restoredMainEvidence = await waitFor(
+      async () => {
+        const state = await readState(popup.client);
+        const liveTabIds = await popup.client.evaluate("chrome.tabs.query({}).then((tabs)=>tabs.filter((tab)=>!tab.pinned&&!tab.url?.includes('/placeholder.html')&&!tab.pendingUrl?.includes('/placeholder.html')).map((tab)=>tab.id).sort((a,b)=>a-b))");
+        const openMainTabs = state.tabs.filter((tab) => tab.groupId === defaultGroup.id && tab.status === "open");
+        const snapshotTabIds = openMainTabs.map((tab) => tab.browserTabId).sort((a, b) => a - b);
+        const recordIds = openMainTabs.map((tab) => tab.id).sort();
+        return { state, liveTabIds, snapshotTabIds, recordIds };
+      },
+      ({ state, liveTabIds, snapshotTabIds, recordIds }) => {
+        const consistent = state.activeGroupId === defaultGroup.id
+          && state.operations.length === 0
+          && originalMainRecordIds.every((recordId) => state.tabs.find((tab) => tab.id === recordId)?.status === "open")
+          && recordIds.join(",") === [...originalMainRecordIds].sort().join(",")
+          && liveTabIds.join(",") === snapshotTabIds.join(",")
+          && state.windows.filter((window) => window.isOpen).every((window) => window.placeholderTabId === null)
+          && state.tabs.find((tab) => tab.id === secondTabRecord.id)?.browserWindowId === secondWindow.windowId;
+        stableMainRestoreSamples = consistent ? stableMainRestoreSamples + 1 : 0;
+        return stableMainRestoreSamples >= 3;
+      },
+      "global restore of Main tabs and live tab IDs",
       25000,
     );
+    const restoredMainState = restoredMainEvidence.state;
     const restoredMainRecordIds = restoredMainState.tabs
       .filter((tab) => tab.groupId === defaultGroup.id && tab.status === "open")
       .map((tab) => tab.id)
@@ -890,13 +915,19 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
     assert.deepEqual(restoredMainRecordIds, [...originalMainRecordIds].sort(),
       "Switching from a new empty group must restore exactly the Main snapshots captured before switching. "
         + "Unexpected records: " + JSON.stringify(unexpectedMainRecords));
-    const defaultLiveTabIds = await popup.client.evaluate("chrome.tabs.query({}).then((tabs)=>tabs.filter((tab)=>!tab.pinned&&!tab.url?.includes('/placeholder.html')&&!tab.pendingUrl?.includes('/placeholder.html')).map((tab)=>tab.id).sort((a,b)=>a-b))");
+    const defaultLiveTabs = await popup.client.evaluate("chrome.tabs.query({}).then((tabs)=>tabs.filter((tab)=>!tab.pinned&&!tab.url?.includes('/placeholder.html')&&!tab.pendingUrl?.includes('/placeholder.html')).map(({id,discarded,active})=>({id,discarded,active})).sort((a,b)=>a.id-b.id))");
+    const defaultLiveTabIds = defaultLiveTabs.map((tab) => tab.id);
     const defaultSnapshotTabIds = restoredMainState.tabs
       .filter((tab) => tab.groupId === defaultGroup.id && tab.status === "open")
       .map((tab) => tab.browserTabId)
       .sort((a, b) => a - b);
     assert.deepEqual(defaultLiveTabIds, defaultSnapshotTabIds,
       "Every live unpinned non-placeholder tab after restoring Main must have exactly one pre-existing snapshot.");
+    const sleepingSnapshotTabIds = restoredMainState.tabs
+      .filter((tab) => tab.groupId === defaultGroup.id && tab.status === "open" && !tab.lastActive)
+      .map((tab) => tab.browserTabId);
+    assert.ok(sleepingSnapshotTabIds.every((tabId) => defaultLiveTabs.some((tab) => tab.id === tabId && tab.discarded)),
+      "Restored background tabs should be discarded by default after the group switch.");
     const manuallyClosedTabs = await popup.client.evaluate("chrome.tabs.query({}).then((tabs)=>tabs.filter((tab)=>tab.url==="
       + JSON.stringify(manualCloseProbe.url)
       + ").map((tab)=>({id:tab.id,url:tab.url})))");
@@ -2286,6 +2317,7 @@ test("packaged group state survives a browser restart", { timeout: 90000 }, asyn
     const switchedFromActionPopup = await waitFor(
       () => readState(popupClient),
       (state) => state.activeGroupId === actionPopupCheckGroup.id
+        && state.operations.length === 0
         && expectedPopupRestoreIds.every((recordId) => state.tabs.find((tab) => tab.id === recordId)?.status === "closed"),
       "switch to the new empty group from the real action popup",
       25000,
@@ -2307,13 +2339,30 @@ test("packaged group state survives a browser restart", { timeout: 90000 }, asyn
     await waitFor(() => restorePopupPage.evaluate("document.readyState"),
       (value) => value === "complete", "restore action popup page load");
     await clickRealActionPopupGroup(restorePopupPage, "Main");
-    const restoredFromActionPopup = await waitFor(
-      () => readState(popupClient),
-      (state) => state.activeGroupId === defaultGroup.id
-        && expectedPopupRestoreIds.every((recordId) => state.tabs.find((tab) => tab.id === recordId)?.status === "open"),
-      "restore Main from the real action popup",
+    let stablePopupRestoreSamples = 0;
+    const restoredPopupEvidence = await waitFor(
+      async () => {
+        const state = await readState(popupClient);
+        const liveTabIds = await popupClient.evaluate("chrome.tabs.query({windowId:" + actionPopupWindowId
+          + "}).then((tabs)=>tabs.filter((tab)=>!tab.pinned&&!tab.url?.includes('/placeholder.html')&&!tab.pendingUrl?.includes('/placeholder.html')).map((tab)=>tab.id).sort((a,b)=>a-b))");
+        const openMainTabs = state.tabs.filter((tab) => tab.groupId === defaultGroup.id && tab.status === "open");
+        const snapshotTabIds = openMainTabs.map((tab) => tab.browserTabId).sort((a, b) => a - b);
+        const recordIds = openMainTabs.map((tab) => tab.id).sort();
+        return { state, liveTabIds, snapshotTabIds, recordIds };
+      },
+      ({ state, liveTabIds, snapshotTabIds, recordIds }) => {
+        const consistent = state.activeGroupId === defaultGroup.id
+          && state.operations.length === 0
+          && expectedPopupRestoreIds.every((recordId) => state.tabs.find((tab) => tab.id === recordId)?.status === "open")
+          && recordIds.join(",") === [...expectedPopupRestoreIds].sort().join(",")
+          && liveTabIds.join(",") === snapshotTabIds.join(",");
+        stablePopupRestoreSamples = consistent ? stablePopupRestoreSamples + 1 : 0;
+        return stablePopupRestoreSamples >= 3;
+      },
+      "restore Main from the real action popup and match live tab IDs",
       25000,
     );
+    const restoredFromActionPopup = restoredPopupEvidence.state;
     const restoredPopupRecordIds = restoredFromActionPopup.tabs
       .filter((tab) => tab.groupId === defaultGroup.id && tab.status === "open")
       .map((tab) => tab.id)
