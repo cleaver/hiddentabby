@@ -136,6 +136,19 @@ export function createChromeBrowserApi(chromeApi = globalThis.chrome) {
       return chromeApi.tabs.update(tabId, { active: true });
     },
 
+    async discardTabs(tabIds) {
+      if (!chromeApi.tabs.discard) return [];
+      const discardedTabs = [];
+      for (const tabId of new Set(tabIds.filter(Number.isInteger))) {
+        // Chromium may replace a tab ID while discarding, so return the browser's updated tab.
+        const discardedTab = await chromeApi.tabs.discard(tabId).catch(() => null);
+        if (Number.isInteger(discardedTab?.id)) {
+          discardedTabs.push({ previousId: tabId, tab: discardedTab });
+        }
+      }
+      return discardedTabs;
+    },
+
     async findMatchingTab(snapshot, windowId, excludedTabIds = []) {
       const excluded = new Set(excludedTabIds);
       const windows = await this.getNormalWindows();

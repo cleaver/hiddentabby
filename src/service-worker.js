@@ -3,6 +3,7 @@ import {
   PIN_ONBOARDING_STORAGE_KEY,
   reconcilePinOnboardingPreference,
 } from "./pin-onboarding-state.js";
+import { createUnloadRestoredTabsSetting } from "./settings.js";
 import { createChromeStorageAdapter, StateStore } from "./state-store.js";
 import { createInitialStateFactory, WorkspaceController } from "./workspace-controller.js";
 
@@ -96,8 +97,13 @@ export function registerServiceWorker(chromeApi, controller) {
 
 if (globalThis.chrome?.runtime?.onInstalled) {
   const browser = createChromeBrowserApi(chrome);
-  const store = new StateStore(createChromeStorageAdapter(chrome.storage.local), {
+  const storage = createChromeStorageAdapter(chrome.storage.local);
+  const store = new StateStore(storage, {
     createInitialState: createInitialStateFactory(browser),
   });
-  registerServiceWorker(chrome, new WorkspaceController({ store, browser }));
+  registerServiceWorker(chrome, new WorkspaceController({
+    store,
+    browser,
+    shouldUnloadRestoredTabs: createUnloadRestoredTabsSetting(storage),
+  }));
 }

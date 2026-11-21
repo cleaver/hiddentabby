@@ -12,6 +12,8 @@ On first run, HiddenTabby creates **Main** and adds existing unpinned tabs from 
 
 Use the toolbar popup to switch groups or create one. Choose **Manage groups** for rename, color, ordering, deletion, and tab moves.
 
+Restored background tabs are unloaded after group switches by default and reload when selected. To keep them loaded, check **Keep restored background tabs loaded** on the extension's **Details** page from `chrome://extensions` in Chrome or `brave://extensions` in Brave.
+
 When only one tab from a HiddenTabby group is open in a window, HiddenTabby leaves it outside the browser's native tab group to avoid the browser's confirmation when closing that last tab. The tab remains assigned to its HiddenTabby group.
 
 ## Restore behavior and privacy

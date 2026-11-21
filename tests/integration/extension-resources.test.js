@@ -31,10 +31,10 @@ test("Manifest V3 permissions and declared extension pages are present", async (
 });
 
 test("extension pages use local scripts and safe DOM text APIs", async () => {
-  for (const page of ["popup.html", "manager.html", "placeholder.html"]) {
+  for (const page of ["popup.html", "details.html", "manager.html", "placeholder.html"]) {
     const html = await readFile(resolve(root, page), "utf8");
     if (page !== "placeholder.html") {
-      const logoMarkup = page === "manager.html"
+      const logoMarkup = ["manager.html", "details.html"].includes(page)
         ? /<img src="icons\/manager-logo\.png" alt="">/
         : /<img src="icons\/icon48\.png" alt="">/;
       assert.match(html, logoMarkup, `${page} should show the project logo`);
@@ -53,10 +53,14 @@ test("extension pages use local scripts and safe DOM text APIs", async () => {
   assert.equal(managerLogo.readUInt32BE(16), 256, "The manager logo should have enough pixels for high-DPI displays.");
   assert.equal(managerLogo.readUInt32BE(20), 256, "The manager logo should remain square.");
 
-  for (const script of ["popup.js", "manager.js"]) {
+  for (const script of ["popup.js", "manager.js", "details.js"]) {
     const source = await readFile(resolve(root, script), "utf8");
     assert.equal(/\.innerHTML\s*=|insertAdjacentHTML\s*\(/.test(source), false, `${script} must not inject page-derived HTML`);
   }
+
+  const manifest = JSON.parse(await readFile(resolve(root, "manifest.json"), "utf8"));
+  assert.deepEqual(manifest.options_ui, { page: "details.html", open_in_tab: false },
+    "Extension options should appear embedded in the browser's extension Details page.");
 
   const manager = await readFile(resolve(root, "manager.html"), "utf8");
   assert.match(manager, /id="pin-guide"[^>]*hidden/, "The pin tip should not interrupt manager startup.");
