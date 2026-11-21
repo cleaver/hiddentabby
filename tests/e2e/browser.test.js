@@ -933,8 +933,24 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
     const sleepingSnapshotTabIds = restoredMainState.tabs
       .filter((tab) => tab.groupId === defaultGroup.id && tab.status === "open" && !tab.lastActive)
       .map((tab) => tab.browserTabId);
-    assert.ok(sleepingSnapshotTabIds.every((tabId) => defaultLiveTabs.some((tab) => tab.id === tabId && tab.discarded)),
-      "Restored background tabs should be discarded by default after the group switch.");
+    const undiscardedSleepingTabs = sleepingSnapshotTabIds
+      .map((tabId) => ({
+        snapshot: restoredMainState.tabs.find((tab) => tab.browserTabId === tabId),
+        live: defaultLiveTabs.find((tab) => tab.id === tabId),
+      }))
+      .filter(({ live }) => !live?.discarded)
+      .map(({ snapshot, live }) => ({
+        id: live?.id,
+        active: live?.active,
+        discarded: live?.discarded,
+        url: snapshot?.url,
+        title: snapshot?.title,
+        windowId: snapshot?.browserWindowId,
+        index: snapshot?.index,
+      }));
+    assert.deepEqual(undiscardedSleepingTabs, [],
+      "Restored background tabs should be discarded by default after the group switch. "
+        + "Undiscarded tabs: " + JSON.stringify(undiscardedSleepingTabs));
     const manuallyClosedTabs = await popup.client.evaluate("chrome.tabs.query({}).then((tabs)=>tabs.filter((tab)=>tab.url==="
       + JSON.stringify(manualCloseProbe.url)
       + ").map((tab)=>({id:tab.id,url:tab.url})))");
