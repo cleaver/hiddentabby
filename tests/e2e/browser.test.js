@@ -776,6 +776,12 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
       "single managed tab ungrouped in its browser window",
     );
     assert.equal(secondWindowSingleton.tab.windowId, secondWindow.windowId);
+    await popup.client.evaluate("chrome.tabs.update(" + secondWindow.tabId + ", {active:true})");
+    await waitFor(
+      () => readState(popup.client),
+      (state) => state.tabs.some((tab) => tab.browserTabId === secondWindow.tabId && tab.lastActive),
+      "real last-active tab tracking in the second window",
+    );
     const browserTabEvidence = await popup.client.evaluate("(async () => { const tab=await chrome.tabs.get("
       + firstWindowTabs.tabId
       + "); const group=await chrome.tabGroups.get(tab.groupId); const pinned=await chrome.tabs.get("
@@ -787,6 +793,7 @@ test("packaged HiddenTabby manages real Chromium tabs and windows", { timeout: 1
     const stateBeforeSwitch = await readState(popup.client);
     const secondTabRecord = stateBeforeSwitch.tabs.find((tab) => tab.browserTabId === secondWindow.tabId);
     assert.ok(secondTabRecord, "The second-window tab should be tracked.");
+    assert.ok(secondTabRecord.lastActive, "The chosen second-window tab should be recorded as last active.");
     const firstLastActiveRecord = stateBeforeSwitch.tabs.find((tab) => tab.browserTabId === firstWindowTabs.tabId);
     assert.ok(firstLastActiveRecord?.lastActive, "The chosen first-window tab should be recorded as last active.");
     const duplicateBrowserOrderBeforeSwitch = await popup.client.evaluate("chrome.tabs.query({windowId:"
