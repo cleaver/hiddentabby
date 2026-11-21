@@ -2778,3 +2778,18 @@ test("global switching preserves ownership at 10, 100, and 500 tabs", async (con
   }
   context.diagnostic(`Fake-adapter switch time by tab count: ${measurements.join(", ")}`);
 });
+
+test("a group switch saves pinned URLs in browser tab order", async () => {
+  const window = normalWindow();
+  const { controller, storage } = setup([window]);
+  const initial = await controller.getState();
+  assert.deepEqual(initial.windows[0].pinnedTabUrls, ["https://pinned.example"]);
+
+  window.tabs[1].index = 2;
+  window.tabs.push({ id: 103, windowId: 10, index: 1, pinned: true, url: "https://another-pin.example" });
+  const created = await controller.createGroup({ name: "Empty" });
+  await controller.switchGroup(created.groups.at(-1).id);
+
+  const saved = (await storage.get("hiddentabby.state"))["hiddentabby.state"];
+  assert.deepEqual(saved.windows[0].pinnedTabUrls, ["https://another-pin.example", "https://pinned.example"]);
+});

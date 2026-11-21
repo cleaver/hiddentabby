@@ -22,10 +22,11 @@ class RetryableOperationError extends Error {}
 export function createInitialStateFactory(browser) {
   return async () => {
     const windows = await browser.getNormalWindows();
-    return createFirstRunState(windows.flatMap((window) => (window.tabs ?? []).map((tab) => ({
+    const state = createFirstRunState(windows.flatMap((window) => (window.tabs ?? []).map((tab) => ({
       ...tab,
       windowId: window.id,
     }))));
+    return { ...state, windows: capturePinnedTabUrls(state.windows, windows) };
   };
 }
 
@@ -1777,6 +1778,13 @@ export class WorkspaceController {
     }
 
     const focusLiveWindows = await this.#browser.getNormalWindows();
+    const windowsWithPinnedUrls = capturePinnedTabUrls(state.windows, focusLiveWindows);
+    if (windowsWithPinnedUrls.some((window, index) => window !== state.windows[index])) {
+      state = await checkpoint((current) => ({
+        ...current,
+        windows: capturePinnedTabUrls(current.windows, focusLiveWindows),
+      }));
+    }
     const finalLiveWindowIds = new Set(focusLiveWindows.map((window) => window.id));
     const destinationGroupWindowIds = new Set(state.tabs
       .filter((tab) => tab.groupId === destinationGroupId && tab.status === "open"
@@ -1995,6 +2003,7 @@ export class WorkspaceController {
       }
     }
 
+    state.windows = capturePinnedTabUrls(state.windows, liveWindows);
     state.operations = state.operations.map((operation) => {
       const recoveredIds = pendingDeletion.operationIds.get(operation.id);
       return recoveredIds?.length
@@ -2038,6 +2047,23 @@ export class WorkspaceController {
     const placeholder = await this.#browser.createPlaceholder(browserWindowId, window.id);
     await this.#store.update((current) => setWindowPlaceholder(current, browserWindowId, placeholder.id));
   }
+}
+
+function pinnedTabUrls(tabs) {
+  const urls = tabs.filter((tab) => tab.pinned && !tab.incognito)
+    .sort((a, b) => a.index - b.index)
+    .map((tab) => tab.url);
+  return urls.every((url) => typeof url === "string" && url.length > 0) ? urls : [];
+}
+
+function capturePinnedTabUrls(windows, liveWindows) {
+  return windows.map((window) => {
+    const live = window.isOpen && liveWindows.find((item) => item.id === window.browserWindowId);
+    const urls = live ? pinnedTabUrls(live.tabs ?? []) : [];
+    const previous = window.pinnedTabUrls ?? [];
+    return urls.length === previous.length && urls.every((url, index) => url === previous[index])
+      ? window : { ...window, pinnedTabUrls: urls };
+  });
 }
 
 function chooseLogicalWindow(state, browserWindow, tabs, used, browser) {
