@@ -2793,3 +2793,40 @@ test("a group switch saves pinned URLs in browser tab order", async () => {
   const saved = (await storage.get("hiddentabby.state"))["hiddentabby.state"];
   assert.deepEqual(saved.windows[0].pinnedTabUrls, ["https://another-pin.example", "https://pinned.example"]);
 });
+
+for (const identicalPins of [false, true]) {
+  test(identicalPins
+    ? "startup leaves windows with identical pinned URLs unmatched"
+    : "startup reconnects a pinned-only window before restoring its saved group", async () => {
+    const windows = identicalPins ? [normalWindow(10), normalWindow(20)] : [normalWindow(10)];
+    const first = setup(windows);
+    const initial = await first.controller.getState();
+    const created = await first.controller.createGroup({ name: "Empty" });
+    await first.controller.switchGroup(created.groups.at(-1).id);
+
+    for (const window of windows) {
+      assert.ok(window.tabs.every((tab) => tab.pinned));
+      window.id += 20;
+      for (const tab of window.tabs) {
+        tab.id += 200;
+        tab.windowId = window.id;
+      }
+    }
+
+    const store = new StateStore(first.storage, { createInitialState: createInitialStateFactory(first.browser) });
+    const restarted = new WorkspaceController({ store, browser: first.browser });
+    const recovered = await restarted.getState();
+    const originalWindow = recovered.windows.find((window) => window.id === initial.windows[0].id);
+    assert.equal(originalWindow.isOpen, !identicalPins);
+    if (identicalPins) {
+      assert.ok(initial.windows.every((saved) => recovered.windows.find((window) => window.id === saved.id)?.isOpen === false));
+      return;
+    }
+
+    await restarted.switchGroup(initial.activeGroupId);
+    assert.deepEqual(windows.map((window) => window.id), [30]);
+    assert.ok(windows[0].tabs.some((tab) => tab.pinned));
+    assert.ok(windows[0].tabs.some((tab) => !tab.pinned && tab.url === "https://one.example"));
+    assert.equal(first.calls.some(([name]) => name === "createWindowWithPlaceholder"), false);
+  });
+}

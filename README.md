@@ -18,7 +18,7 @@ When only one tab from a HiddenTabby group is open in a window, HiddenTabby leav
 
 ## Restore behavior and privacy
 
-Inactive group tabs are closed so that windows can show only the selected group. Windows with pinned tabs stay open, and pinned tabs remain outside every group. A New Tab page is saved only when its group has another meaningful tab in that same logical window; New-Tab-only windows and HiddenTabby placeholders are not remembered. Empty groups keep pinned windows without extra placeholders, or retain one temporary window when no pinned window is available. Navigating its placeholder adds the page to the active group.
+Inactive group tabs are closed so that windows can show only the selected group. Windows with pinned tabs stay open, and pinned tabs remain outside every group. HiddenTabby remembers their URLs in tab order locally so it can reconnect a window containing only pinned tabs after a restart when the match is unique. A New Tab page is saved only when its group has another meaningful tab in that same logical window; New-Tab-only windows and HiddenTabby placeholders are not remembered. Empty groups keep pinned windows without extra placeholders, or retain one temporary window when no pinned window is available. Navigating its placeholder adds the page to the active group.
 
 Deleting an open tab in the Workspace Manager closes its window if that tab was the window's last tab; otherwise, only the selected tab closes. Pinned tabs keep their window open. If the full-page Workspace Manager is itself the only tab in its window, its Delete action is disabled. This is separate from group switching, which still uses a temporary placeholder when needed to keep a window usable.
 

@@ -1915,10 +1915,15 @@ export class WorkspaceController {
     const liveTabIds = new Set();
     const activeWindows = new Set();
     const pendingDeletion = pendingDeleteTabIds(state, liveWindows);
+    const pinnedMatches = matchPinnedWindows(state, liveWindows, this.#browser);
 
     for (const browserWindow of liveWindows) {
       const tabs = [...(browserWindow.tabs ?? [])].sort((a, b) => a.index - b.index);
       let logicalWindow = chooseLogicalWindow(state, browserWindow, tabs, matchedLogicalWindows, this.#browser);
+      const pinnedMatch = pinnedMatches.get(browserWindow.id);
+      if (!logicalWindow && pinnedMatch && !matchedLogicalWindows.has(pinnedMatch.id)) {
+        logicalWindow = pinnedMatch;
+      }
       if (!logicalWindow) {
         const pendingTemporaryId = tabs.map((tab) => placeholderWindowKey(this.#browser, tab))
           .find((key) => typeof key === "string" && state.operations.some((operation) =>
@@ -2064,6 +2069,32 @@ function capturePinnedTabUrls(windows, liveWindows) {
     return urls.length === previous.length && urls.every((url, index) => url === previous[index])
       ? window : { ...window, pinnedTabUrls: urls };
   });
+}
+
+function matchPinnedWindows(state, liveWindows, browser) {
+  const preferredIds = new Set();
+  const liveUrls = new Map();
+  for (const window of liveWindows) {
+    const tabs = [...(window.tabs ?? [])].sort((a, b) => a.index - b.index);
+    const preferred = chooseLogicalWindow(state, window, tabs, new Set(), browser);
+    if (preferred) preferredIds.add(preferred.id);
+    liveUrls.set(window.id, pinnedTabUrls(tabs));
+  }
+
+  const matches = new Map();
+  for (const window of liveWindows) {
+    const urls = liveUrls.get(window.id);
+    if (!urls.length || !window.tabs.every((tab) => tab.pinned)) continue;
+    const sameUrls = (other) => other?.length === urls.length
+      && urls.every((url, index) => url === other[index]);
+    if ([...liveUrls.values()].filter(sameUrls).length !== 1) continue;
+    const candidates = state.windows.filter((saved) => saved.isOpen
+      && sameUrls(saved.pinnedTabUrls));
+    if (candidates.length === 1 && !preferredIds.has(candidates[0].id)) {
+      matches.set(window.id, candidates[0]);
+    }
+  }
+  return matches;
 }
 
 function chooseLogicalWindow(state, browserWindow, tabs, used, browser) {
