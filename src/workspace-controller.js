@@ -1748,11 +1748,25 @@ export class WorkspaceController {
           failures.push(`Could not activate the last tab in window ${window.browserWindowId}: ${error.message}`);
         });
       }
+      const liveWindowAfterActivation = (await this.#browser.getNormalWindows())
+        .find((candidate) => candidate.id === window.browserWindowId);
+      const liveActiveTab = liveWindowAfterActivation?.tabs?.find((tab) => tab.active
+        && groupTabs.some((candidate) => candidate.browserTabId === tab.id));
+      const activeTabId = liveActiveTab?.id ?? lastActive?.browserTabId ?? null;
+      if (Number.isInteger(activeTabId)) {
+        state = await checkpoint((current) => ({
+          ...current,
+          tabs: current.tabs.map((tab) => tab.groupId === destinationGroupId
+            && tab.windowId === window.id && tab.status === "open"
+            ? { ...tab, lastActive: tab.browserTabId === activeTabId }
+            : tab),
+        }));
+      }
       // Restored tabs start loading immediately. When enabled, unload all but the active one
       // after the switch so a large group does not stay loaded at once.
       const sleepingTabIds = groupTabs
         .map((tab) => tab.browserTabId)
-        .filter((tabId) => restoredTabIds.has(tabId) && tabId !== lastActive?.browserTabId);
+        .filter((tabId) => restoredTabIds.has(tabId) && tabId !== activeTabId);
       if (sleepingTabIds.length && await this.#shouldUnloadRestoredTabs().catch(() => false)) {
         const discardedTabs = await this.#browser.discardTabs?.(sleepingTabIds).catch(() => []) ?? [];
         const discardedByPreviousId = new Map(discardedTabs

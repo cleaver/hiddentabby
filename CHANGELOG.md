@@ -4,6 +4,7 @@
 
 - Restore groups into their existing pinned window after a browser restart when its pinned tabs uniquely identify it.
 - Improve group-switch responsiveness and reduce memory use by unloading restored background tabs by default, including on existing installations with no saved preference and after a switch resumes from an interruption. Users can opt out on the extension Details page by checking "Keep restored background tabs loaded." Tabs reload when selected; pages may start loading during the switch.
+- Preserve the browser's actual active tab when unloading restored background tabs during a group switch.
 
 ## 0.2.2 — 2026-10-21
 

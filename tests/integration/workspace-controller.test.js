@@ -299,6 +299,37 @@ test("switching back unloads restored tabs except the one it activates when enab
     "The tab to keep must be active before the others are unloaded.");
 });
 
+test("switch records the browser's active restored tab before unloading backgrounds", async () => {
+  const windows = [windowWithThreeTabs()];
+  const { controller, browser, calls } = setup(windows, unloadRestoredTabs);
+  const initial = await controller.getState();
+  const created = await controller.createGroup({ name: "Empty" });
+  await controller.switchGroup(created.groups.at(-1).id);
+  calls.length = 0;
+
+  const createTab = browser.createTab.bind(browser);
+  browser.createTab = async (properties) => {
+    const createdTab = await createTab(properties);
+    if (properties.url === "https://two.example") {
+      const window = windows.find((candidate) => candidate.id === properties.windowId);
+      window.tabs = window.tabs.map((tab) => ({ ...tab, active: tab.id === createdTab.id }));
+    }
+    return createdTab;
+  };
+  browser.activateTab = async (tabId) => { calls.push(["activate", tabId]); };
+
+  const restored = await controller.switchGroup(initial.activeGroupId);
+  const activeRecord = restored.state.tabs.find((tab) => tab.url === "https://two.example");
+  const discardedIds = calls.filter(([name]) => name === "discard").flatMap(([, ids]) => ids);
+
+  assert.equal(activeRecord.lastActive, true);
+  assert.ok(!discardedIds.includes(activeRecord.browserTabId));
+  assert.deepEqual(new Set(discardedIds), new Set(restored.state.tabs
+    .filter((tab) => tab.groupId === initial.activeGroupId && tab.status === "open"
+      && tab.id !== activeRecord.id)
+    .map((tab) => tab.browserTabId)));
+});
+
 test("switch stores replacement tab IDs returned while unloading backgrounds", async () => {
   const windows = [windowWithThreeTabs()];
   const { controller, browser, calls } = setup(windows, unloadRestoredTabs);
